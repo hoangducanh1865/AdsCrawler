@@ -5,6 +5,7 @@ import hashlib
 import math
 from datetime import datetime, timedelta
 from ..utils.minio_client import MinioClient
+from ..utils.kafka_producer import KafkaJsonProducer
 
 class MockGenerator:
     """
@@ -38,8 +39,10 @@ class MockGenerator:
         ]
     }
 
-    def __init__(self, endpoint=None, access_key=None, secret_key=None, enable_xlsx_buffer=False):
-        self.minio_client = MinioClient(endpoint, access_key, secret_key)
+    def __init__(self, endpoint=None, access_key=None, secret_key=None, enable_xlsx_buffer=False, output_mode="minio", kafka_bootstrap_servers=None):
+        self.output_mode = output_mode
+        self.minio_client = MinioClient(endpoint, access_key, secret_key) if output_mode == "minio" else None
+        self.kafka_producer = KafkaJsonProducer(kafka_bootstrap_servers) if output_mode == "kafka" else None
         self.rng = random.Random()
         self.export_buffer = {}
         self.enable_xlsx_buffer = enable_xlsx_buffer
@@ -118,9 +121,12 @@ class MockGenerator:
         if self.enable_xlsx_buffer:
             if table_name not in self.export_buffer: self.export_buffer[table_name] = []
             self.export_buffer[table_name].extend(data)
-        result = self.minio_client.upload_json(table_name, data)
-        # Quiet upload logging to avoid cluttering stdout
-        if not result["success"]: print(f"   ... FAILED upload {table_name}: {result['error']}")
+        if self.output_mode == "kafka":
+            self.kafka_producer.produce(table_name, data)
+        else:
+            result = self.minio_client.upload_json(table_name, data)
+            # Quiet upload logging to avoid cluttering stdout
+            if not result["success"]: print(f"   ... FAILED upload {table_name}: {result['error']}")
 
     def export_to_xlsx(self, filepath):
         try:
@@ -359,4 +365,9 @@ class MockGenerator:
         self._upload_chunk(TABLES["ad_perf"], list(ad_perf_map.values()))
         self._upload_chunk(TABLES["adset_perf"], list(adset_perf_map.values()))
         self._upload_chunk(TABLES["campaign_perf"], list(campaign_perf_map.values()))
+
+        # Flush Kafka producer if using kafka output
+        if self.output_mode == "kafka" and self.kafka_producer:
+            self.kafka_producer.flush()
+
         print(f"Mock Generator: Success. [Total Ads Processed: {len(ad_perf_map)}]")

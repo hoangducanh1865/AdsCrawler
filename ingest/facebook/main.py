@@ -7,7 +7,7 @@ from .crawler import FacebookCrawler
 
 import argparse
 
-def run_ingestion(mode="mock", start_date=None, end_date=None, options=None):
+def run_ingestion(mode="mock", start_date=None, end_date=None, options=None, output_mode="minio"):
     options = options or {}
 
     # Cấu hình ngày mặc định: 20 ngày gần nhất nếu không có
@@ -19,14 +19,17 @@ def run_ingestion(mode="mock", start_date=None, end_date=None, options=None):
 
     if mode == "mock":
         seed = options.get('seed', "mkt_bigdata_seed_2026")
+        target = "Kafka" if output_mode == "kafka" else "MinIO"
         print(f">>> Bắt đầu sinh dữ liệu ảo DETERMINISTIC (Seed: {seed})")
-        print(f">>> Đẩy vào MinIO từ {start_date} đến {end_date}...")
+        print(f">>> Đẩy vào {target} từ {start_date} đến {end_date}...")
 
         generator = MockGenerator(
             endpoint=os.getenv('MINIO_ENDPOINT', 'localhost:9005'),
             access_key=os.getenv('MINIO_ACCESS_KEY', 'admin'),
             secret_key=os.getenv('MINIO_SECRET_KEY', 'password123'),
-            enable_xlsx_buffer=options.get('xlsx', False)
+            enable_xlsx_buffer=options.get('xlsx', False),
+            output_mode=output_mode,
+            kafka_bootstrap_servers=os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092'),
         )
 
         try:
@@ -34,9 +37,9 @@ def run_ingestion(mode="mock", start_date=None, end_date=None, options=None):
 
             if options.get('xlsx'):
                 print(">>> Hoàn tất sinh dữ liệu. Đang xuất file Excel...")
-                generator.export_to_xlsx("facebook_mock_report.xlsx")
+                # generator.export_to_xlsx("facebook_mock_report.xlsx")
 
-            print(">>> SUCCESS: Dữ liệu đã sẵn sàng trên MinIO")
+            print(f">>> SUCCESS: Dữ liệu đã sẵn sàng trên {target}")
         except Exception as e:
             print(f"!!! Lỗi khi sinh dữ liệu: {e}")
 
@@ -51,6 +54,7 @@ def run_ingestion(mode="mock", start_date=None, end_date=None, options=None):
 def main():
     parser = argparse.ArgumentParser(description="Facebook Ingestion Tool")
     parser.add_argument("--mode", type=str, default="mock", choices=["mock", "real"], help="Ingestion mode")
+    parser.add_argument("--output", type=str, default="minio", choices=["minio", "kafka"], help="Output target: minio (direct) or kafka")
     parser.add_argument("--xlsx", action="store_true", default=False, help="Export mock data to Excel (default: False)")
     parser.add_argument("--no-xlsx", action="store_false", dest="xlsx", help="Do not export mock data to Excel")
     parser.add_argument("--days", type=int, default=20, help="Days of data to generate/fetch")
@@ -70,7 +74,7 @@ def main():
         "adPerAdset": 5
     }
 
-    run_ingestion(mode=args.mode, start_date=args.start_date, end_date=args.end_date, options=options)
+    run_ingestion(mode=args.mode, start_date=args.start_date, end_date=args.end_date, options=options, output_mode=args.output)
 
 if __name__ == "__main__":
     main()
