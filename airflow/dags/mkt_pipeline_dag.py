@@ -1,5 +1,6 @@
 # airflow/dags/mkt_pipeline_dag.py
-# This DAG defines a marketing data pipeline that automates the ingestion of mock data to MinIO.
+# This DAG defines a marketing data pipeline that automates the ingestion of mock data
+# through Kafka → Kafka Connect → MinIO → Spark → ClickHouse.
 
 from airflow import DAG
 from airflow.operators.bash import BashOperator
@@ -16,36 +17,40 @@ default_args = {
 with DAG(
     'marketing_data_pipeline',
     default_args=default_args,
-    description='Automated pipeline for landing mock marketing data in MinIO',
+    description='Automated pipeline: Mock → Kafka → MinIO → Spark → ClickHouse',
     schedule_interval='@daily',
     catchup=False,
-    tags=['marketing', 'minio', 'mock']
+    tags=['marketing', 'kafka', 'minio', 'mock']
 ) as dag:
 
     t0_mock_facebook = BashOperator(
         task_id='mock_generation_facebook',
         bash_command="""
-            pip install --quiet minio openpyxl pandas &&
+            pip install --quiet minio openpyxl pandas confluent-kafka &&
             cd /opt/spark/work-dir &&
             export PYTHONPATH=$PYTHONPATH:/opt/spark/work-dir &&
-            export MINIO_ENDPOINT=minio:9000 &&
-            export MINIO_ACCESS_KEY=admin &&
-            export MINIO_SECRET_KEY=password123 &&
-            python3 -m ingest.facebook.main --mode mock
+            export KAFKA_BOOTSTRAP_SERVERS=kafka:29092 &&
+            python3 -m ingest.facebook.main --mode mock --output kafka \
+                --start-date {{ ds }} --end-date {{ ds }}
         """
     )
 
     t0_mock_google = BashOperator(
         task_id='mock_generation_google',
         bash_command="""
-            pip install --quiet minio openpyxl pandas &&
+            pip install --quiet minio openpyxl pandas confluent-kafka &&
             cd /opt/spark/work-dir &&
             export PYTHONPATH=$PYTHONPATH:/opt/spark/work-dir &&
-            export MINIO_ENDPOINT=minio:9000 &&
-            export MINIO_ACCESS_KEY=admin &&
-            export MINIO_SECRET_KEY=password123 &&
-            python3 -m ingest.google.main --mode mock
+            export KAFKA_BOOTSTRAP_SERVERS=kafka:29092 &&
+            python3 -m ingest.google.main --mode mock --output kafka \
+                --start-date {{ ds }} --end-date {{ ds }}
         """
+    )
+
+    # Wait for Kafka Connect to flush data to MinIO
+    t_wait_flush = BashOperator(
+        task_id='wait_kafka_connect_flush',
+        bash_command="echo 'Waiting 90s for Kafka Connect to flush to MinIO...' && sleep 90"
     )
 
     t1_minio_ingest = BashOperator(
@@ -56,24 +61,11 @@ with DAG(
 /opt/airflow/jars/hadoop-aws.jar,\
 /opt/airflow/jars/aws-java-sdk-bundle.jar,\
 /opt/airflow/jars/commons-pool2.jar \
-            /opt/spark/work-dir/spark_consumer/minio_ingest.py
+            /opt/spark/work-dir/spark_consumer/minio_ingest.py \
+            --date {{ ds }}
         """
     )
 
-    # t2_spark_processor = BashOperator(
-    #     task_id='spark_batch_processor',
-    #     bash_command="""
-    #         spark-submit --master spark://spark-master:7077 \
-    #         --jars /opt/airflow/jars/spark-sql-kafka.jar,\
-    # /opt/airflow/jars/kafka-clients.jar,\
-    # /opt/airflow/jars/clickhouse-jdbc.jar,\
-    # /opt/airflow/jars/hadoop-aws.jar,\
-    # /opt/airflow/jars/aws-java-sdk-bundle.jar,\
-    # /opt/airflow/jars/commons-pool2.jar,\
-    # /opt/airflow/jars/spark-token-provider-kafka.jar \
-    #         /opt/spark/work-dir/spark_consumer/main.py
-    #     """
-    # )
+    # DAG: Mock → Kafka → (wait flush) → Spark reads MinIO → ClickHouse
+    [t0_mock_facebook, t0_mock_google] >> t_wait_flush >> t1_minio_ingest
 
-    # t0_mock_generation >> t1_minio_ingest >> t2_spark_processor
-    [t0_mock_facebook, t0_mock_google] >> t1_minio_ingest

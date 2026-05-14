@@ -37,7 +37,71 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qo'
-      
+
+    networks:
+      - marketing-net
+
+  # 2b. Kafka Connect (S3 Sink → MinIO)
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect:latest
+    container_name: mkt_kafka_connect
+    depends_on:
+      - kafka
+      - minio
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:29092
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_GROUP_ID: mkt-connect-group
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_PLUGIN_PATH: "/usr/share/java,/usr/share/confluent-hub-components"
+    command:
+      - bash
+      - -c
+      - |
+        echo "Installing S3 Sink Connector plugin..."
+        confluent-hub install --no-prompt confluentinc/kafka-connect-s3:latest
+        echo "Starting Kafka Connect..."
+        /etc/confluent/docker/run
+    networks:
+      - marketing-net
+
+  # 2c. Auto-register S3 Sink Connector
+  kafka-connect-init:
+    image: curlimages/curl:latest
+    container_name: mkt_kafka_connect_init
+    depends_on:
+      - kafka-connect
+    volumes:
+      - ./kafka-connect/connect-s3-sink.json:/config.json:ro
+    entrypoint: >
+      /bin/sh -c "echo 'Waiting for Kafka Connect to be ready...' && until curl -s http://kafka-connect:8083/connectors > /dev/null; do sleep 5; done && echo 'Registering S3 Sink Connector...' && curl -s -X PUT http://kafka-connect:8083/connectors/minio-s3-sink/config -H 'Content-Type: application/json' -d @/config.json && echo 'Connector registered successfully!'"
+    networks:
+      - marketing-net
+
+  # 2d. Kafka UI (Monitoring)
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: mkt_kafka_ui
+    depends_on:
+      - kafka
+      - kafka-connect
+    ports:
+      - "8084:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: marketing-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: mkt-connect
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://kafka-connect:8083
     networks:
       - marketing-net
 
@@ -46,8 +110,8 @@ services:
     image: minio/minio:latest
     container_name: mkt_minio
     ports:
-      - "9005:9000" 
-      - "9006:9001" 
+      - "9005:9000"
+      - "9006:9001"
     environment:
       MINIO_ROOT_USER: admin
       MINIO_ROOT_PASSWORD: password123
@@ -63,43 +127,38 @@ services:
     depends_on:
       - minio
     entrypoint: >
-      /bin/sh -c "
-      until (/usr/bin/mc alias set myminio http://minio:9000 admin password123) do echo 'Waiting for MinIO...' && sleep 1; done;
-      /usr/bin/mc mb myminio/marketing-datalake;
-      /usr/bin/mc anonymous set public myminio/marketing-datalake;
-      exit 0;
-      "
+      /bin/sh -c " until (/usr/bin/mc alias set myminio http://minio:9000 admin password123) do echo 'Waiting for MinIO...' && sleep 1; done; /usr/bin/mc mb myminio/marketing-datalake; /usr/bin/mc anonymous set public myminio/marketing-datalake; exit 0; "
     networks:
       - marketing-net
 
-  superset:
-    build: 
-      context: .
-      dockerfile: Dockerfile.superset
-    container_name: mkt_superset
-    ports:
-      - "8088:8088"
-    environment:
-      - SUPERSET_SECRET_KEY=marketing_big_data_key_2026
-      - ADMIN_USERNAME=admin
-      - ADMIN_EMAIL=admin@fab.org
-      - ADMIN_PASSWORD=password123
-      - SQLALCHEMY_DATABASE_URI=sqlite:////app/superset_home/superset.db
-    depends_on:
-      - clickhouse
-      - kafka
-      - minio
-    volumes:
-      - superset_data:/app/superset_home
-    networks:
-      - marketing-net
-    entrypoint: >
-      /bin/sh -c "
-      superset fab create-admin --username $$ADMIN_USERNAME --firstname Superset --lastname Admin --email $$ADMIN_EMAIL --password $$ADMIN_PASSWORD || true &&
-      superset db upgrade &&
-      superset init &&
-      superset run -p 8088 --with-threads --reload --debugger --host 0.0.0.0
-      "
+  # superset:
+  #   build: 
+  #     context: .
+  #     dockerfile: Dockerfile.superset
+  #   container_name: mkt_superset
+  #   ports:
+  #     - "8088:8088"
+  #   environment:
+  #     - SUPERSET_SECRET_KEY=marketing_big_data_key_2026
+  #     - ADMIN_USERNAME=admin
+  #     - ADMIN_EMAIL=admin@fab.org
+  #     - ADMIN_PASSWORD=password123
+  #     - SQLALCHEMY_DATABASE_URI=sqlite:////app/superset_home/superset.db
+  #   depends_on:
+  #     - clickhouse
+  #     - kafka
+  #     - minio
+  #   volumes:
+  #     - superset_data:/app/superset_home
+  #   networks:
+  #     - marketing-net
+  #   entrypoint: >
+  #     /bin/sh -c "
+  #     superset fab create-admin --username $$ADMIN_USERNAME --firstname Superset --lastname Admin --email $$ADMIN_EMAIL --password $$ADMIN_PASSWORD || true &&
+  #     superset db upgrade &&
+  #     superset init &&
+  #     superset run -p 8088 --with-threads --reload --debugger --host 0.0.0.0
+  #     "
 
   spark-master:
     image: apache/spark:3.5.1
@@ -144,12 +203,7 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
     command: >
-      bash -c "
-      mkdir -p /opt/airflow/logs/scheduler &&
-      pip install confluent-kafka requests &&
-      airflow db migrate &&
-      airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password password123 || true
-      "
+      bash -c " mkdir -p /opt/airflow/logs/scheduler && pip install confluent-kafka requests && airflow db migrate && airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password password123 || true "
     networks:
       - marketing-net
     volumes:
@@ -203,7 +257,7 @@ services:
   airflow-scheduler:
     build:
       context: .
-      dockerfile: Dockerfile.airflow  
+      dockerfile: Dockerfile.airflow
     image: mkt_airflow:latest
     container_name: mkt_airflow_scheduler
     depends_on:

@@ -20,6 +20,7 @@ Run (inside Docker):
 """
 
 import os
+import argparse
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
@@ -50,20 +51,36 @@ def create_spark() -> SparkSession:
     )
 
 
-def read_table(spark: SparkSession, table_name: str):
+def read_table(spark: SparkSession, table_name: str, process_date: str = None):
     """
-    Read all JSON files for a MinIO landing-zone table.
+    Read JSON files for a MinIO landing-zone table.
 
-    MinIO path layout written by MockGenerator/MinioClient:
-      {bucket}/{table_name}/{YYYY}/{MM}/{DD}/{HH}/{mm}/{userId}_{ts}_{uuid}.json
+    If process_date is given (YYYY-MM-DD), read only that day's partition:
+      {bucket}/{table_name}/year=YYYY/month=MM/day=DD/*.json
 
-    Each file is a JSON array of records, multiLine=True lets Spark
-    parse an array-rooted file into one row per element.
+    If process_date is None (legacy), read all files recursively:
+      {bucket}/{table_name}/
     """
-    path = f"s3a://{MINIO_BUCKET}/{table_name}/*/*/*/*/*/*.json"
+    if process_date:
+        year, month, day = process_date.split("-")
+        path = (
+            f"s3a://{MINIO_BUCKET}/{table_name}/"
+            f"year={year}/month={month}/day={day}/*.json"
+        )
+    else:
+        # Legacy: read all files (backward-compatible with direct MinIO uploads)
+        path = f"s3a://{MINIO_BUCKET}/{table_name}/"
     try:
-        df = spark.read.option("multiLine", "true").json(path)
-        print(f"  [READ] {table_name}: {df.count()} rows")
+        read_opts = spark.read
+        if process_date:
+            # Kafka Connect writes JSON Lines (one record per line)
+            df = read_opts.json(path)
+        else:
+            # Legacy direct uploads are JSON arrays (multiLine)
+            df = read_opts.option("multiLine", "true") \
+                          .option("recursiveFileLookup", "true") \
+                          .json(path)
+        print(f"  [READ] {table_name}: {df.count()} rows (date={process_date or 'ALL'})")
         return df
     except Exception as exc:
         print(f"  [WARN] Cannot read {table_name}: {exc}")
@@ -344,15 +361,27 @@ def process_age_gender(df) -> None:
     )
 
 def main():
+    parser = argparse.ArgumentParser(description="MinIO to ClickHouse Batch Ingestion")
+    parser.add_argument(
+        "--date", type=str, default=None,
+        help="Process date (YYYY-MM-DD). If omitted, reads ALL data (legacy mode)."
+    )
+    args = parser.parse_args()
+    process_date = args.date
+
     spark = create_spark()
     spark.sparkContext.setLogLevel("WARN")
 
     print("=" * 55)
     print("  MinIO -> ClickHouse Batch Ingestion")
+    if process_date:
+        print(f"  Processing date: {process_date}")
+    else:
+        print("  Mode: FULL (all data)")
     print("=" * 55)
 
     print("\n[1/3] fad_ad_daily_report")
-    df_daily = read_table(spark, "fad_ad_daily_report")
+    df_daily = read_table(spark, "fad_ad_daily_report", process_date)
     if df_daily is not None:
         df_daily.persist()
         process_ad_daily(df_daily)
@@ -360,7 +389,7 @@ def main():
         df_daily.unpersist()
 
     print("\n[2/3] fad_age_gender_detailed_report")
-    df_demo = read_table(spark, "fad_age_gender_detailed_report")
+    df_demo = read_table(spark, "fad_age_gender_detailed_report", process_date)
     if df_demo is not None:
         process_age_gender(df_demo)
 
