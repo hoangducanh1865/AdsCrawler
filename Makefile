@@ -1,4 +1,4 @@
-.PHONY: k8s-up k8s-down k8s-status k8s-logs compose-up compose-down
+.PHONY: k8s-up k8s-down k8s-status k8s-logs compose-up compose-down speed-layer
 
 # --- Kubernetes (minikube) ---
 
@@ -31,6 +31,14 @@ minio-ui:
 
 spark-ui:
 	minikube service spark-master -n marketing
+
+# --- Speed Layer (Spark Structured Streaming) ---
+
+speed-layer:
+	docker compose exec airflow-scheduler spark-submit \
+		--master spark://spark-master:7077 \
+		--jars /opt/airflow/jars/spark-sql-kafka-0-10_2.12-3.5.1.jar,/opt/airflow/jars/kafka-clients-3.5.1.jar,/opt/airflow/jars/hadoop-aws.jar,/opt/airflow/jars/aws-java-sdk-bundle.jar,/opt/airflow/jars/commons-pool2.jar \
+		/opt/spark/work-dir/spark_consumer/speed_layer.py
 
 # --- Docker Compose (local dev) ---
 
