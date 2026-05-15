@@ -1,0 +1,23 @@
+{
+  "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
+  "tasks.max": "1",
+  "topics": "processed_dim_account,processed_dim_campaign,processed_dim_adset,processed_dim_ad,processed_dim_creative,processed_dim_date,processed_fact_fb_ad_daily,processed_fact_fb_ad_creative_daily,processed_fact_fb_ad_demographic_daily,processed_fad_ad_daily_report",
+  "connection.url": "jdbc:clickhouse://clickhouse:8123/marketing_db?ssl=false",
+  "connection.user": "admin",
+  "connection.password": "password123",
+  "insert.mode": "insert",
+  "pk.mode": "none",
+  "auto.create": "false",
+  "auto.evolve": "false",
+  "table.name.format": "${topic}",
+  "transforms": "stripPrefix",
+  "transforms.stripPrefix.type": "org.apache.kafka.connect.transforms.RegexRouter",
+  "transforms.stripPrefix.regex": "processed_(.*)",
+  "transforms.stripPrefix.replacement": "$1",
+  "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+  "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+  "value.converter.schemas.enable": "false",
+  "errors.tolerance": "all",
+  "errors.deadletterqueue.topic.name": "dlq_speed_layer",
+  "errors.deadletterqueue.topic.replication.factor": "1"
+}

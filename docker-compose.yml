@@ -70,6 +70,11 @@ services:
       - |
         echo "Installing S3 Sink Connector plugin..."
         confluent-hub install --no-prompt confluentinc/kafka-connect-s3:latest
+        echo "Installing JDBC Sink Connector plugin..."
+        confluent-hub install --no-prompt confluentinc/kafka-connect-jdbc:latest
+        echo "Downloading ClickHouse JDBC driver..."
+        curl -fL -o /usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib/clickhouse-jdbc.jar \
+          https://repo1.maven.org/maven2/com/clickhouse/clickhouse-jdbc/0.3.2/clickhouse-jdbc-0.3.2-all.jar
         echo "Starting Kafka Connect..."
         /etc/confluent/docker/run
     networks:
@@ -82,9 +87,18 @@ services:
     depends_on:
       - kafka-connect
     volumes:
-      - ./kafka-connect/connect-s3-sink.json:/config.json:ro
+      - ./kafka-connect/connect-s3-sink.json:/s3-config.json:ro
+      - ./kafka-connect/connect-jdbc-sink.json:/jdbc-config.json:ro
     entrypoint: >
-      /bin/sh -c "echo 'Waiting for Kafka Connect to be ready...' && until curl -s http://kafka-connect:8083/connectors > /dev/null; do sleep 5; done && echo 'Registering S3 Sink Connector...' && curl -s -X PUT http://kafka-connect:8083/connectors/minio-s3-sink/config -H 'Content-Type: application/json' -d @/config.json && echo 'Connector registered successfully!'"
+      /bin/sh -c "
+      echo 'Waiting for Kafka Connect...' &&
+      until curl -s http://kafka-connect:8083/connectors > /dev/null; do sleep 5; done &&
+      echo 'Registering S3 Sink Connector...' &&
+      curl -s -X PUT http://kafka-connect:8083/connectors/minio-s3-sink/config -H 'Content-Type: application/json' -d @/s3-config.json &&
+      echo 'Registering JDBC Sink Connector...' &&
+      curl -s -X PUT http://kafka-connect:8083/connectors/clickhouse-jdbc-sink/config -H 'Content-Type: application/json' -d @/jdbc-config.json &&
+      echo 'All connectors registered!'
+      "
     networks:
       - marketing-net
 
@@ -286,6 +300,35 @@ services:
     command: airflow scheduler
     networks:
       - marketing-net
+
+  # 8. Speed Layer (Spark Structured Streaming)
+  speed-layer:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    image: mkt_airflow:latest
+    container_name: mkt_speed_layer
+    depends_on:
+      - kafka
+      - spark-master
+      - minio-init
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=password123
+      - MINIO_BUCKET=marketing-datalake
+      - SPEED_LAYER_TRIGGER=30 seconds
+    command: >
+      spark-submit
+      --master spark://spark-master:7077
+      --jars /opt/airflow/jars/spark-sql-kafka.jar,/opt/airflow/jars/kafka-clients.jar,/opt/airflow/jars/hadoop-aws.jar,/opt/airflow/jars/aws-java-sdk-bundle.jar,/opt/airflow/jars/commons-pool2.jar,/opt/airflow/jars/spark-token-provider-kafka.jar
+      /opt/spark/work-dir/spark_consumer/speed_layer.py
+    volumes:
+      - ./:/opt/spark/work-dir
+    networks:
+      - marketing-net
+    restart: on-failure
 
 volumes:
   clickhouse_data:
