@@ -66,6 +66,7 @@ def _dispatch(request):
         start_date=options.get("start_date"),
         end_date=options.get("end_date"),
         options=options,
+        output_mode="kafka",
     )
 
 

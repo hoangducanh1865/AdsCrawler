@@ -26,24 +26,24 @@ with DAG(
     t0_mock_facebook = BashOperator(
         task_id='mock_generation_facebook',
         bash_command="""
-            pip install --quiet minio openpyxl pandas confluent-kafka &&
+            pip install --quiet confluent-kafka &&
             cd /opt/spark/work-dir &&
             export PYTHONPATH=$PYTHONPATH:/opt/spark/work-dir &&
             export KAFKA_BOOTSTRAP_SERVERS=kafka:29092 &&
-            python3 -m ingest.facebook.main --mode mock --output kafka \
-                --start-date {{ ds }} --end-date {{ ds }}
+            python3 -m ingest.workers.batch_producer \
+                --platform facebook --mode mock --start-date {{ ds }} --end-date {{ ds }}
         """
     )
 
     t0_mock_google = BashOperator(
         task_id='mock_generation_google',
         bash_command="""
-            pip install --quiet minio openpyxl pandas confluent-kafka &&
+            pip install --quiet confluent-kafka &&
             cd /opt/spark/work-dir &&
             export PYTHONPATH=$PYTHONPATH:/opt/spark/work-dir &&
             export KAFKA_BOOTSTRAP_SERVERS=kafka:29092 &&
-            python3 -m ingest.google.main --mode mock --output kafka \
-                --start-date {{ ds }} --end-date {{ ds }}
+            python3 -m ingest.workers.batch_producer \
+                --platform google --mode mock --start-date {{ ds }} --end-date {{ ds }}
         """
     )
 

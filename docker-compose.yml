@@ -303,7 +303,40 @@ services:
     networks:
       - marketing-net
 
-  # 8. Speed Layer (Spark Structured Streaming)
+  # 8. Batch Consumer (Worker — listens on topic_batch_requests, runs ingestion → Kafka)
+  batch-consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    image: mkt_airflow:latest
+    container_name: mkt_batch_consumer
+    depends_on:
+      - kafka
+      - minio-init
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=password123
+      - MINIO_BUCKET=marketing-datalake
+    command: >
+      bash -c "
+      cd /opt/spark/work-dir &&
+      export PYTHONPATH=$PYTHONPATH:/opt/spark/work-dir &&
+      pip install --quiet minio openpyxl pandas confluent-kafka &&
+      while true; do
+        python3 -m ingest.workers.batch_consumer;
+        echo 'batch_consumer exited, restarting in 5s...';
+        sleep 5;
+      done
+      "
+    volumes:
+      - ./:/opt/spark/work-dir
+    networks:
+      - marketing-net
+    restart: on-failure
+
+  # 9. Speed Layer (Spark Structured Streaming)
   speed-layer:
     build:
       context: .
