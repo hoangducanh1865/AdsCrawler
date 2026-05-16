@@ -17,6 +17,8 @@ services:
       - "9000:9000"
     volumes:
       - clickhouse_data:/var/lib/clickhouse
+      - ./init_clickhouse.sql:/docker-entrypoint-initdb.d/01_init.sql
+      - ./init_clickhouse_realtime.sql:/docker-entrypoint-initdb.d/02_realtime.sql
     networks:
       - marketing-net
 

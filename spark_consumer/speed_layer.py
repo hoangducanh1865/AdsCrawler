@@ -1,11 +1,14 @@
 # spark_consumer/speed_layer.py
 """
 Speed Layer: Spark Structured Streaming
-  Source  : Kafka raw topics (fad_ad_daily_report, fad_age_gender_detailed_report)
-  Sink    : Kafka processed topics — one per dim/fact table (10 topics total)
+  Sources : Kafka raw topics
+              fad_ad_daily_report
+              fad_age_gender_detailed_report
+              topic_google_raw
+  Sink    : Kafka processed topics — one per dim/fact table
   Trigger : every 30 seconds (configurable via SPEED_LAYER_TRIGGER env var)
 
-  Output topics:
+  Facebook output topics (10):
     processed_dim_account
     processed_dim_campaign
     processed_dim_adset
@@ -16,6 +19,23 @@ Speed Layer: Spark Structured Streaming
     processed_fact_fb_ad_creative_daily
     processed_fad_ad_daily_report
     processed_fact_fb_ad_demographic_daily
+
+  Google output topics (15):
+    processed_gad_campaign_daily_report
+    processed_gad_ad_group_daily_report
+    processed_gad_account_daily_report
+    processed_gad_keyword_performance_report
+    processed_gad_demographic_report
+    processed_gad_ad_asset_daily_report
+    processed_gad_click_type_report
+    processed_dim_gg_adgroup
+    processed_dim_gg_asset
+    processed_fact_gg_campaign_daily
+    processed_fact_gg_adgroup_daily
+    processed_fact_gg_keyword_daily
+    processed_fact_gg_demographic_daily
+    processed_fact_gg_asset_daily
+    processed_fact_gg_click_type_daily
 
   Run (inside Docker, from airflow-scheduler container which has spark-submit + JARs):
     spark-submit --master spark://spark-master:7077 \\
@@ -47,8 +67,9 @@ TRIGGER_INTERVAL = os.getenv("SPEED_LAYER_TRIGGER", "30 seconds")
 # Raw input topics
 TOPIC_AD_DAILY   = "fad_ad_daily_report"
 TOPIC_AGE_GENDER = "fad_age_gender_detailed_report"
+TOPIC_GOOGLE_RAW = "topic_google_raw"
 
-# Processed output topics (1 per ClickHouse table)
+# Facebook processed output topics (1 per ClickHouse table)
 TOPIC_DIM_ACCOUNT      = "processed_dim_account"
 TOPIC_DIM_CAMPAIGN     = "processed_dim_campaign"
 TOPIC_DIM_ADSET        = "processed_dim_adset"
@@ -59,6 +80,23 @@ TOPIC_FACT_AD_DAILY    = "processed_fact_fb_ad_daily"
 TOPIC_FACT_AD_CREATIVE = "processed_fact_fb_ad_creative_daily"
 TOPIC_FACT_DEMOGRAPHIC = "processed_fact_fb_ad_demographic_daily"
 TOPIC_FAD_REPORT       = "processed_fad_ad_daily_report"
+
+# Google processed output topics
+TOPIC_GG_CAMPAIGN_DAILY   = "processed_gad_campaign_daily_report"
+TOPIC_GG_ADGROUP_DAILY    = "processed_gad_ad_group_daily_report"
+TOPIC_GG_ACCOUNT_DAILY    = "processed_gad_account_daily_report"
+TOPIC_GG_KEYWORD_DAILY    = "processed_gad_keyword_performance_report"
+TOPIC_GG_DEMOGRAPHIC      = "processed_gad_demographic_report"
+TOPIC_GG_AD_ASSET         = "processed_gad_ad_asset_daily_report"
+TOPIC_GG_CLICK_TYPE       = "processed_gad_click_type_report"
+TOPIC_DIM_GG_ADGROUP      = "processed_dim_gg_adgroup"
+TOPIC_DIM_GG_ASSET        = "processed_dim_gg_asset"
+TOPIC_FACT_GG_CAMPAIGN    = "processed_fact_gg_campaign_daily"
+TOPIC_FACT_GG_ADGROUP     = "processed_fact_gg_adgroup_daily"
+TOPIC_FACT_GG_KEYWORD     = "processed_fact_gg_keyword_daily"
+TOPIC_FACT_GG_DEMOGRAPHIC = "processed_fact_gg_demographic_daily"
+TOPIC_FACT_GG_ASSET       = "processed_fact_gg_asset_daily"
+TOPIC_FACT_GG_CLICK_TYPE  = "processed_fact_gg_click_type_daily"
 
 # ── Input schemas ──────────────────────────────────────────────────────────────
 
@@ -107,6 +145,124 @@ AD_DAILY_SCHEMA  = StructType(_AD_DAILY_FIELDS)
 AGE_GENDER_SCHEMA = StructType(_AD_DAILY_FIELDS + [
     StructField("age",    StringType()),
     StructField("gender", StringType()),
+])
+
+# ── Google input schemas ───────────────────────────────────────────────────────
+
+# Outer envelope: {"metadata": {"platform": ..., "report_type": ...}, "data": "..."}
+_GG_META_SCHEMA = StructType([
+    StructField("platform",    StringType()),
+    StructField("report_type", StringType()),
+])
+GG_ENVELOPE_SCHEMA = StructType([
+    StructField("metadata", _GG_META_SCHEMA),
+    StructField("data",     StringType()),
+])
+
+_GG_CAMPAIGN_SCHEMA = StructType([
+    StructField("id",              StringType()),
+    StructField("name",            StringType()),
+    StructField("date",            StringType()),
+    StructField("impressions",     IntegerType()),
+    StructField("clicks",          IntegerType()),
+    StructField("cost",            FloatType()),
+    StructField("all_conversions", IntegerType()),
+    StructField("ctr",             FloatType()),
+])
+
+_GG_ADGROUP_SCHEMA = StructType([
+    StructField("id",              StringType()),
+    StructField("name",            StringType()),
+    StructField("date",            StringType()),
+    StructField("impressions",     IntegerType()),
+    StructField("clicks",          IntegerType()),
+    StructField("cost",            FloatType()),
+    StructField("all_conversions", IntegerType()),
+    StructField("ctr",             FloatType()),
+])
+
+_GG_ACCOUNT_SCHEMA = StructType([
+    StructField("id",              StringType()),
+    StructField("name",            StringType()),
+    StructField("date",            StringType()),
+    StructField("impressions",     IntegerType()),
+    StructField("clicks",          IntegerType()),
+    StructField("cost",            FloatType()),
+    StructField("all_conversions", IntegerType()),
+    StructField("account_id",      StringType()),
+    StructField("ctr",             FloatType()),
+])
+
+_GG_BREAKDOWN_FIELDS = [
+    StructField("adgroup_id",          StringType()),
+    StructField("date",                StringType()),
+    StructField("campaign_id",         StringType()),
+    StructField("campaign_name",       StringType()),
+    StructField("adgroup_name",        StringType()),
+    StructField("account_id",          StringType()),
+    StructField("account_name",        StringType()),
+    StructField("device",              StringType()),
+    StructField("impressions",         IntegerType()),
+    StructField("clicks",              IntegerType()),
+    StructField("ctr",                 FloatType()),
+    StructField("conversions",         IntegerType()),
+    StructField("all_conversions",     IntegerType()),
+    StructField("average_cpc",         FloatType()),
+    StructField("cost_per_conversion", FloatType()),
+    StructField("cost",                FloatType()),
+]
+
+_GG_KEYWORD_SCHEMA = StructType(_GG_BREAKDOWN_FIELDS + [
+    StructField("keyword",       StringType()),
+    StructField("quality_score", IntegerType()),
+])
+
+_GG_AGE_SCHEMA = StructType(_GG_BREAKDOWN_FIELDS + [
+    StructField("age_range", StringType()),
+])
+
+_GG_GENDER_SCHEMA = StructType(_GG_BREAKDOWN_FIELDS + [
+    StructField("gender", StringType()),
+])
+
+_GG_AD_ASSET_SCHEMA = StructType([
+    StructField("ad_id",             StringType()),
+    StructField("asset_id",          StringType()),
+    StructField("date",              StringType()),
+    StructField("campaign_id",       StringType()),
+    StructField("campaign_name",     StringType()),
+    StructField("adgroup_id",        StringType()),
+    StructField("adgroup_name",      StringType()),
+    StructField("asset_name",        StringType()),
+    StructField("asset_type",        StringType()),
+    StructField("asset_text",        StringType()),
+    StructField("image_url",         StringType()),
+    StructField("asset_performance", StringType()),
+    StructField("impressions",       IntegerType()),
+    StructField("clicks",            IntegerType()),
+    StructField("ctr",               FloatType()),
+    StructField("all_conversions",   IntegerType()),
+    StructField("cost",              FloatType()),
+    StructField("account_id",        StringType()),
+    StructField("account_name",      StringType()),
+])
+
+_GG_CLICK_TYPE_SCHEMA = StructType([
+    StructField("campaign_id",     StringType()),
+    StructField("date",            StringType()),
+    StructField("click_type",      StringType()),
+    StructField("campaign_name",   StringType()),
+    StructField("campaign_status", StringType()),
+    StructField("impressions",     IntegerType()),
+    StructField("clicks",          IntegerType()),
+    StructField("ctr",             FloatType()),
+    StructField("conversions",     IntegerType()),
+    StructField("all_conversions", IntegerType()),
+    StructField("device",          StringType()),
+    StructField("ad_network_type", StringType()),
+    StructField("cost",            FloatType()),
+    StructField("account_id",      StringType()),
+    StructField("account_name",    StringType()),
 ])
 
 # ── SparkSession ───────────────────────────────────────────────────────────────
@@ -397,6 +553,254 @@ def process_age_gender_batch(batch_df: DataFrame, epoch_id: int) -> None:
     )
     print(f"[epoch={epoch_id}] Done.")
 
+
+def process_google_batch(batch_df: DataFrame, epoch_id: int) -> None:
+    """
+    foreachBatch handler for topic_google_raw.
+    batch_df has columns: (platform, report_type, raw_data) — envelope already parsed.
+    Dispatches by report_type and produces to 15 processed_gg_* Kafka topics.
+    """
+    if batch_df.rdd.isEmpty():
+        return
+
+    print(f"\n[epoch={epoch_id}] topic_google_raw — transforming...")
+    batch_df.persist()
+
+    def _parse(report_type, schema):
+        return batch_df.filter(F.col("report_type") == report_type).select(
+            F.from_json(F.col("raw_data"), schema).alias("d")
+        ).select("d.*")
+
+    # ── 1. campaign_daily ─────────────────────────────────────────────────────
+    camp = _parse("campaign_daily", _GG_CAMPAIGN_SCHEMA)
+    camp.persist()
+    base_camp = camp.filter(F.col("id").isNotNull()).select(
+        F.col("id").alias("campaign_id"),
+        F.coalesce(F.col("name"), F.lit("Unknown")).alias("campaign_name"),
+        F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
+        F.coalesce(F.col("impressions"),          F.lit(0)).alias("impressions"),
+        F.coalesce(F.col("clicks"),               F.lit(0)).alias("clicks"),
+        F.coalesce(F.col("cost").cast("float"),   F.lit(0.0)).alias("cost"),
+        F.coalesce(F.col("all_conversions"),      F.lit(0)).alias("all_conversions"),
+        F.coalesce(F.col("ctr").cast("float"),    F.lit(0.0)).alias("ctr"),
+    )
+    produce_to_kafka(base_camp, TOPIC_GG_CAMPAIGN_DAILY)
+    produce_to_kafka(
+        base_camp.select("campaign_id", "date", "impressions", "clicks",
+                         "cost", "all_conversions", "ctr"),
+        TOPIC_FACT_GG_CAMPAIGN,
+    )
+    camp.unpersist()
+
+    # ── 2. ad_group_daily ─────────────────────────────────────────────────────
+    adg = _parse("ad_group_daily", _GG_ADGROUP_SCHEMA)
+    adg.persist()
+    base_adg = adg.filter(F.col("id").isNotNull()).select(
+        F.col("id").alias("adgroup_id"),
+        F.coalesce(F.col("name"), F.lit("Unknown")).alias("adgroup_name"),
+        F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
+        F.coalesce(F.col("impressions"),          F.lit(0)).alias("impressions"),
+        F.coalesce(F.col("clicks"),               F.lit(0)).alias("clicks"),
+        F.coalesce(F.col("cost").cast("float"),   F.lit(0.0)).alias("cost"),
+        F.coalesce(F.col("all_conversions"),      F.lit(0)).alias("all_conversions"),
+        F.coalesce(F.col("ctr").cast("float"),    F.lit(0.0)).alias("ctr"),
+    )
+    produce_to_kafka(base_adg, TOPIC_GG_ADGROUP_DAILY)
+    produce_to_kafka(
+        base_adg.select("adgroup_id", "date", "impressions", "clicks",
+                         "cost", "all_conversions", "ctr"),
+        TOPIC_FACT_GG_ADGROUP,
+    )
+    adg.unpersist()
+
+    # ── 3. account ────────────────────────────────────────────────────────────
+    acct = _parse("account", _GG_ACCOUNT_SCHEMA)
+    produce_to_kafka(
+        acct.filter(F.col("account_id").isNotNull()).select(
+            F.col("account_id"),
+            F.coalesce(F.col("name"), F.lit("Unknown")).alias("account_name"),
+            F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
+            F.coalesce(F.col("impressions"),          F.lit(0)).alias("impressions"),
+            F.coalesce(F.col("clicks"),               F.lit(0)).alias("clicks"),
+            F.coalesce(F.col("cost").cast("float"),   F.lit(0.0)).alias("cost"),
+            F.coalesce(F.col("all_conversions"),      F.lit(0)).alias("all_conversions"),
+            F.coalesce(F.col("ctr").cast("float"),    F.lit(0.0)).alias("ctr"),
+        ),
+        TOPIC_GG_ACCOUNT_DAILY,
+    )
+
+    # ── 4. keyword ────────────────────────────────────────────────────────────
+    kw = _parse("keyword", _GG_KEYWORD_SCHEMA)
+    kw.persist()
+    valid_kw = kw.filter(F.col("adgroup_id").isNotNull() & F.col("keyword").isNotNull())
+    produce_to_kafka(
+        valid_kw.select(
+            F.col("adgroup_id"),
+            F.coalesce(F.col("campaign_id"),    F.lit("")).alias("campaign_id"),
+            F.coalesce(F.col("adgroup_name"),   F.lit("Unknown")).alias("adgroup_name"),
+        ).dropDuplicates(["adgroup_id"]),
+        TOPIC_DIM_GG_ADGROUP,
+    )
+    flat_kw = valid_kw.select(
+        F.col("adgroup_id"),
+        F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
+        F.col("campaign_id"),
+        F.coalesce(F.col("campaign_name"),             F.lit("")).alias("campaign_name"),
+        F.coalesce(F.col("adgroup_name"),              F.lit("")).alias("adgroup_name"),
+        F.col("account_id"),
+        F.coalesce(F.col("account_name"),              F.lit("")).alias("account_name"),
+        F.coalesce(F.col("device"),                    F.lit("UNKNOWN")).alias("device"),
+        F.col("keyword"),
+        F.coalesce(F.col("quality_score"),             F.lit(0)).alias("quality_score"),
+        F.coalesce(F.col("impressions"),               F.lit(0)).alias("impressions"),
+        F.coalesce(F.col("clicks"),                    F.lit(0)).alias("clicks"),
+        F.coalesce(F.col("ctr").cast("float"),         F.lit(0.0)).alias("ctr"),
+        F.coalesce(F.col("conversions"),               F.lit(0)).alias("conversions"),
+        F.coalesce(F.col("all_conversions"),           F.lit(0)).alias("all_conversions"),
+        F.coalesce(F.col("average_cpc").cast("float"), F.lit(0.0)).alias("average_cpc"),
+        F.coalesce(F.col("cost_per_conversion").cast("float"), F.lit(0.0)).alias("cost_per_conversion"),
+        F.coalesce(F.col("cost").cast("float"),        F.lit(0.0)).alias("cost"),
+    )
+    produce_to_kafka(flat_kw, TOPIC_GG_KEYWORD_DAILY)
+    produce_to_kafka(
+        flat_kw.select(
+            "date", "account_id", "campaign_id", "adgroup_id",
+            "keyword", "device", "quality_score",
+            "impressions", "clicks", "cost", "conversions", "all_conversions",
+            "ctr", "average_cpc", "cost_per_conversion",
+        ),
+        TOPIC_FACT_GG_KEYWORD,
+    )
+    kw.unpersist()
+
+    # ── 5. demographic (age + gender merged) ──────────────────────────────────
+    age_df    = _parse("age",    _GG_AGE_SCHEMA)
+    gender_df = _parse("gender", _GG_GENDER_SCHEMA)
+
+    def _shape_demo(parsed, age_col, gender_col):
+        return parsed.filter(F.col("adgroup_id").isNotNull()).select(
+            F.col("adgroup_id"),
+            F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
+            F.col("campaign_id"),
+            F.coalesce(F.col("campaign_name"),             F.lit("")).alias("campaign_name"),
+            F.coalesce(F.col("adgroup_name"),              F.lit("")).alias("adgroup_name"),
+            F.col("account_id"),
+            F.coalesce(F.col("account_name"),              F.lit("")).alias("account_name"),
+            F.coalesce(F.col("device"),                    F.lit("UNKNOWN")).alias("device"),
+            age_col.alias("age_range"),
+            gender_col.alias("gender"),
+            F.coalesce(F.col("impressions"),               F.lit(0)).alias("impressions"),
+            F.coalesce(F.col("clicks"),                    F.lit(0)).alias("clicks"),
+            F.coalesce(F.col("ctr").cast("float"),         F.lit(0.0)).alias("ctr"),
+            F.coalesce(F.col("conversions"),               F.lit(0)).alias("conversions"),
+            F.coalesce(F.col("all_conversions"),           F.lit(0)).alias("all_conversions"),
+            F.coalesce(F.col("average_cpc").cast("float"), F.lit(0.0)).alias("average_cpc"),
+            F.coalesce(F.col("cost_per_conversion").cast("float"), F.lit(0.0)).alias("cost_per_conversion"),
+            F.coalesce(F.col("cost").cast("float"),        F.lit(0.0)).alias("cost"),
+        )
+
+    parts = []
+    if not age_df.rdd.isEmpty():
+        parts.append(_shape_demo(age_df, F.col("age_range"), F.lit("")))
+    if not gender_df.rdd.isEmpty():
+        parts.append(_shape_demo(gender_df, F.lit(""), F.col("gender")))
+
+    if parts:
+        combined = parts[0] if len(parts) == 1 else parts[0].unionByName(parts[1])
+        combined.persist()
+        produce_to_kafka(combined, TOPIC_GG_DEMOGRAPHIC)
+        produce_to_kafka(
+            combined.select(
+                "date", "account_id", "campaign_id", "adgroup_id",
+                "age_range", "gender", "device",
+                "impressions", "clicks", "cost",
+                "conversions", "all_conversions",
+                "ctr", "average_cpc", "cost_per_conversion",
+            ),
+            TOPIC_FACT_GG_DEMOGRAPHIC,
+        )
+        combined.unpersist()
+
+    # ── 6. ad_asset ───────────────────────────────────────────────────────────
+    asset = _parse("ad_asset", _GG_AD_ASSET_SCHEMA)
+    asset.persist()
+    valid_asset = asset.filter(F.col("ad_id").isNotNull() & F.col("asset_id").isNotNull())
+    produce_to_kafka(
+        valid_asset.select(
+            F.col("asset_id"),
+            F.coalesce(F.col("ad_id"),       F.lit("")).alias("ad_id"),
+            F.coalesce(F.col("asset_name"),  F.lit("")).alias("asset_name"),
+            F.coalesce(F.col("asset_type"),  F.lit("")).alias("asset_type"),
+            F.coalesce(F.col("asset_text"),  F.lit("")).alias("asset_text"),
+            F.coalesce(F.col("image_url"),   F.lit("")).alias("image_url"),
+        ).dropDuplicates(["asset_id"]),
+        TOPIC_DIM_GG_ASSET,
+    )
+    flat_asset = valid_asset.select(
+        F.col("ad_id"),
+        F.col("asset_id"),
+        F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
+        F.col("campaign_id"),
+        F.coalesce(F.col("campaign_name"),             F.lit("")).alias("campaign_name"),
+        F.col("adgroup_id"),
+        F.coalesce(F.col("adgroup_name"),              F.lit("")).alias("adgroup_name"),
+        F.coalesce(F.col("asset_name"),                F.lit("")).alias("asset_name"),
+        F.coalesce(F.col("asset_type"),                F.lit("")).alias("asset_type"),
+        F.coalesce(F.col("asset_text"),                F.lit("")).alias("asset_text"),
+        F.coalesce(F.col("image_url"),                 F.lit("")).alias("image_url"),
+        F.coalesce(F.col("asset_performance"),         F.lit("")).alias("asset_performance"),
+        F.coalesce(F.col("impressions"),               F.lit(0)).alias("impressions"),
+        F.coalesce(F.col("clicks"),                    F.lit(0)).alias("clicks"),
+        F.coalesce(F.col("ctr").cast("float"),         F.lit(0.0)).alias("ctr"),
+        F.coalesce(F.col("all_conversions"),           F.lit(0)).alias("all_conversions"),
+        F.coalesce(F.col("cost").cast("float"),        F.lit(0.0)).alias("cost"),
+        F.col("account_id"),
+        F.coalesce(F.col("account_name"),              F.lit("")).alias("account_name"),
+    )
+    produce_to_kafka(flat_asset, TOPIC_GG_AD_ASSET)
+    produce_to_kafka(
+        flat_asset.select(
+            "date", "account_id", "campaign_id", "adgroup_id", "ad_id", "asset_id",
+            "asset_performance", "impressions", "clicks", "cost", "all_conversions", "ctr",
+        ),
+        TOPIC_FACT_GG_ASSET,
+    )
+    asset.unpersist()
+
+    # ── 7. click_type ─────────────────────────────────────────────────────────
+    ct = _parse("click_type", _GG_CLICK_TYPE_SCHEMA)
+    valid_ct = ct.filter(F.col("campaign_id").isNotNull() & F.col("click_type").isNotNull())
+    flat_ct = valid_ct.select(
+        F.col("campaign_id"),
+        F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
+        F.col("click_type"),
+        F.coalesce(F.col("campaign_name"),             F.lit("")).alias("campaign_name"),
+        F.coalesce(F.col("campaign_status"),           F.lit("")).alias("campaign_status"),
+        F.coalesce(F.col("impressions"),               F.lit(0)).alias("impressions"),
+        F.coalesce(F.col("clicks"),                    F.lit(0)).alias("clicks"),
+        F.coalesce(F.col("ctr").cast("float"),         F.lit(0.0)).alias("ctr"),
+        F.coalesce(F.col("conversions"),               F.lit(0)).alias("conversions"),
+        F.coalesce(F.col("all_conversions"),           F.lit(0)).alias("all_conversions"),
+        F.coalesce(F.col("device"),                    F.lit("UNKNOWN")).alias("device"),
+        F.coalesce(F.col("ad_network_type"),           F.lit("")).alias("ad_network_type"),
+        F.coalesce(F.col("cost").cast("float"),        F.lit(0.0)).alias("cost"),
+        F.col("account_id"),
+        F.coalesce(F.col("account_name"),              F.lit("")).alias("account_name"),
+    )
+    produce_to_kafka(flat_ct, TOPIC_GG_CLICK_TYPE)
+    produce_to_kafka(
+        flat_ct.select(
+            "date", "account_id", "campaign_id",
+            "click_type", "device", "ad_network_type",
+            "impressions", "clicks", "cost",
+            "conversions", "all_conversions", "ctr",
+        ),
+        TOPIC_FACT_GG_CLICK_TYPE,
+    )
+
+    batch_df.unpersist()
+    print(f"[epoch={epoch_id}] Google Done.")
+
 # ── main ───────────────────────────────────────────────────────────────────────
 
 def main():
@@ -444,7 +848,30 @@ def main():
         .start()
     )
 
-    print(f"\nStreaming queries active: {q_ad_daily.id}, {q_age_gender.id}")
+    # Stream 3: topic_google_raw → 15 processed_gg_* topics
+    # Parse the envelope (outer JSON only) in the streaming graph; inner JSON
+    # per-report-type is parsed inside process_google_batch to avoid schema conflicts.
+    google_raw = read_kafka_stream(spark, TOPIC_GOOGLE_RAW)
+    parsed_google = google_raw.select(
+        F.from_json(F.col("value").cast("string"), GG_ENVELOPE_SCHEMA).alias("e")
+    ).select(
+        F.col("e.metadata.platform").alias("platform"),
+        F.col("e.metadata.report_type").alias("report_type"),
+        F.col("e.data").alias("raw_data"),
+    ).filter(F.col("platform") == "google")
+
+    q_google = (
+        parsed_google.writeStream
+        .foreachBatch(process_google_batch)
+        .option(
+            "checkpointLocation",
+            f"s3a://{MINIO_BUCKET}/checkpoints/speed_layer/google/",
+        )
+        .trigger(processingTime=TRIGGER_INTERVAL)
+        .start()
+    )
+
+    print(f"\nStreaming queries active: {q_ad_daily.id}, {q_age_gender.id}, {q_google.id}")
     print("Waiting for termination (Ctrl+C to stop)...")
     spark.streams.awaitAnyTermination()
 
