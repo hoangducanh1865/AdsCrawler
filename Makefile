@@ -1,4 +1,4 @@
-.PHONY: k8s-up k8s-down k8s-status k8s-logs compose-up compose-down
+.PHONY: k8s-up k8s-down k8s-status k8s-logs compose-up compose-down speed-layer speed-layer-logs
 
 # --- Kubernetes (minikube) ---
 
@@ -31,6 +31,14 @@ minio-ui:
 
 spark-ui:
 	minikube service spark-master -n marketing
+
+# --- Speed Layer (Spark Structured Streaming) ---
+
+speed-layer:
+	docker compose up -d speed-layer
+
+speed-layer-logs:
+	docker compose logs -f speed-layer
 
 # --- Docker Compose (local dev) ---
 
