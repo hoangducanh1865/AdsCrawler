@@ -3,11 +3,20 @@
 Batch Spark job: read mock data JSON files from MinIO -> write to ClickHouse.
 
 MinIO tables consumed:
-  fad_ad_daily_report -> dim_account, dim_campaign, dim_adset, dim_ad,
-                                    dim_creative, dim_date,
-                                    fact_fb_ad_daily, fact_fb_ad_creative_daily,
-                                    fad_ad_daily_report
-  fad_age_gender_detailed_report -> fact_fb_ad_demographic_daily
+  fad_ad_daily_report              -> dim_account, dim_campaign, dim_adset, dim_ad,
+                                      dim_creative, dim_date,
+                                      fact_fb_ad_daily, fact_fb_ad_creative_daily,
+                                      fad_ad_daily_report
+  fad_age_gender_detailed_report   -> fact_fb_ad_demographic_daily
+  gad_campaign_daily_report        -> gad_campaign_daily_report, fact_gg_campaign_daily
+  gad_ad_group_daily_report        -> gad_ad_group_daily_report, fact_gg_adgroup_daily
+  gad_account_daily_report         -> gad_account_daily_report, dim_account
+  gad_keyword_performance_report   -> gad_keyword_performance_report, dim_campaign,
+                                      dim_gg_adgroup, fact_gg_keyword_daily
+  gad_age_report + gad_gender_report -> gad_demographic_report, fact_gg_demographic_daily
+  gad_ad_asset_daily_report        -> gad_ad_asset_daily_report, dim_gg_asset,
+                                      fact_gg_asset_daily
+  gad_click_type_report            -> gad_click_type_report, fact_gg_click_type_daily
 
 Run (inside Docker):
   spark-submit \
@@ -360,6 +369,254 @@ def process_age_gender(df) -> None:
         "marketing_db.fact_fb_ad_demographic_daily",
     )
 
+
+# ── Google Ads batch processing ───────────────────────────────────────────────
+
+def process_gg_campaign(df) -> None:
+    base = df.filter(F.col("id").isNotNull()).select(
+        F.col("id").alias("campaign_id"),
+        F.coalesce(F.col("name"), F.lit("Unknown")).alias("campaign_name"),
+        F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
+        F.coalesce(F.col("impressions").cast("int"),     F.lit(0)).alias("impressions"),
+        F.coalesce(F.col("clicks").cast("int"),          F.lit(0)).alias("clicks"),
+        F.coalesce(F.col("cost").cast("float"),          F.lit(0.0)).alias("cost"),
+        F.coalesce(F.col("all_conversions").cast("int"), F.lit(0)).alias("all_conversions"),
+        F.coalesce(F.col("ctr").cast("float"),           F.lit(0.0)).alias("ctr"),
+    )
+    base.persist()
+    write_ch(base, "marketing_db.gad_campaign_daily_report")
+    write_ch(
+        base.select("campaign_id", "date", "impressions", "clicks", "cost", "all_conversions", "ctr"),
+        "marketing_db.fact_gg_campaign_daily",
+    )
+    base.unpersist()
+
+
+def process_gg_adgroup(df) -> None:
+    base = df.filter(F.col("id").isNotNull()).select(
+        F.col("id").alias("adgroup_id"),
+        F.coalesce(F.col("name"), F.lit("Unknown")).alias("adgroup_name"),
+        F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
+        F.coalesce(F.col("impressions").cast("int"),     F.lit(0)).alias("impressions"),
+        F.coalesce(F.col("clicks").cast("int"),          F.lit(0)).alias("clicks"),
+        F.coalesce(F.col("cost").cast("float"),          F.lit(0.0)).alias("cost"),
+        F.coalesce(F.col("all_conversions").cast("int"), F.lit(0)).alias("all_conversions"),
+        F.coalesce(F.col("ctr").cast("float"),           F.lit(0.0)).alias("ctr"),
+    )
+    base.persist()
+    write_ch(base, "marketing_db.gad_ad_group_daily_report")
+    write_ch(
+        base.select("adgroup_id", "date", "impressions", "clicks", "cost", "all_conversions", "ctr"),
+        "marketing_db.fact_gg_adgroup_daily",
+    )
+    base.unpersist()
+
+
+def process_gg_account(df) -> None:
+    flat = df.filter(F.col("account_id").isNotNull()).select(
+        F.col("account_id"),
+        F.coalesce(F.col("name"), F.lit("Unknown")).alias("account_name"),
+        F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
+        F.coalesce(F.col("impressions").cast("int"),     F.lit(0)).alias("impressions"),
+        F.coalesce(F.col("clicks").cast("int"),          F.lit(0)).alias("clicks"),
+        F.coalesce(F.col("cost").cast("float"),          F.lit(0.0)).alias("cost"),
+        F.coalesce(F.col("all_conversions").cast("int"), F.lit(0)).alias("all_conversions"),
+        F.coalesce(F.col("ctr").cast("float"),           F.lit(0.0)).alias("ctr"),
+    )
+    flat.persist()
+    write_ch(flat, "marketing_db.gad_account_daily_report")
+    write_ch(
+        flat.select("account_id", "account_name").dropDuplicates(["account_id"]),
+        "marketing_db.dim_account",
+    )
+    flat.unpersist()
+
+
+def process_gg_keyword(df) -> None:
+    valid = df.filter(F.col("adgroup_id").isNotNull() & F.col("keyword").isNotNull())
+    valid.persist()
+
+    write_ch(
+        valid.select(
+            F.col("campaign_id"),
+            F.coalesce(F.col("account_id"), F.lit("")).alias("account_id"),
+            F.coalesce(F.col("campaign_name"), F.lit("Unknown")).alias("campaign_name"),
+        ).filter(F.col("campaign_id").isNotNull()).dropDuplicates(["campaign_id"]),
+        "marketing_db.dim_campaign",
+    )
+    write_ch(
+        valid.select(
+            F.col("adgroup_id"),
+            F.coalesce(F.col("campaign_id"), F.lit("")).alias("campaign_id"),
+            F.coalesce(F.col("adgroup_name"), F.lit("Unknown")).alias("adgroup_name"),
+        ).dropDuplicates(["adgroup_id"]),
+        "marketing_db.dim_gg_adgroup",
+    )
+
+    flat = valid.select(
+        F.col("adgroup_id"),
+        F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
+        F.col("campaign_id"),
+        F.coalesce(F.col("campaign_name"), F.lit("")).alias("campaign_name"),
+        F.coalesce(F.col("adgroup_name"), F.lit("")).alias("adgroup_name"),
+        F.col("account_id"),
+        F.coalesce(F.col("account_name"), F.lit("")).alias("account_name"),
+        F.coalesce(F.col("device"), F.lit("UNKNOWN")).alias("device"),
+        F.col("keyword"),
+        F.coalesce(F.col("quality_score").cast("int"), F.lit(0)).alias("quality_score"),
+        F.coalesce(F.col("impressions").cast("int"),          F.lit(0)).alias("impressions"),
+        F.coalesce(F.col("clicks").cast("int"),               F.lit(0)).alias("clicks"),
+        F.coalesce(F.col("ctr").cast("float"),                F.lit(0.0)).alias("ctr"),
+        F.coalesce(F.col("conversions").cast("int"),          F.lit(0)).alias("conversions"),
+        F.coalesce(F.col("all_conversions").cast("int"),      F.lit(0)).alias("all_conversions"),
+        F.coalesce(F.col("average_cpc").cast("float"),        F.lit(0.0)).alias("average_cpc"),
+        F.coalesce(F.col("cost_per_conversion").cast("float"), F.lit(0.0)).alias("cost_per_conversion"),
+        F.coalesce(F.col("cost").cast("float"),               F.lit(0.0)).alias("cost"),
+    )
+    write_ch(flat, "marketing_db.gad_keyword_performance_report")
+    write_ch(
+        flat.select(
+            "date", "account_id", "campaign_id", "adgroup_id", "keyword", "device",
+            "quality_score", "impressions", "clicks", "cost",
+            "conversions", "all_conversions", "ctr", "average_cpc", "cost_per_conversion",
+        ),
+        "marketing_db.fact_gg_keyword_daily",
+    )
+    valid.unpersist()
+
+
+def process_gg_demographic(df_age, df_gender) -> None:
+    def _shape(df, age_col, gender_col):
+        if df is None:
+            return None
+        return df.filter(F.col("adgroup_id").isNotNull()).select(
+            F.col("adgroup_id"),
+            F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
+            F.col("campaign_id"),
+            F.coalesce(F.col("campaign_name"), F.lit("")).alias("campaign_name"),
+            F.coalesce(F.col("adgroup_name"), F.lit("")).alias("adgroup_name"),
+            F.col("account_id"),
+            F.coalesce(F.col("account_name"), F.lit("")).alias("account_name"),
+            F.coalesce(F.col("device"), F.lit("UNKNOWN")).alias("device"),
+            age_col.alias("age_range"),
+            gender_col.alias("gender"),
+            F.coalesce(F.col("impressions").cast("int"),          F.lit(0)).alias("impressions"),
+            F.coalesce(F.col("clicks").cast("int"),               F.lit(0)).alias("clicks"),
+            F.coalesce(F.col("ctr").cast("float"),                F.lit(0.0)).alias("ctr"),
+            F.coalesce(F.col("conversions").cast("int"),          F.lit(0)).alias("conversions"),
+            F.coalesce(F.col("all_conversions").cast("int"),      F.lit(0)).alias("all_conversions"),
+            F.coalesce(F.col("average_cpc").cast("float"),        F.lit(0.0)).alias("average_cpc"),
+            F.coalesce(F.col("cost_per_conversion").cast("float"), F.lit(0.0)).alias("cost_per_conversion"),
+            F.coalesce(F.col("cost").cast("float"),               F.lit(0.0)).alias("cost"),
+        )
+
+    parts = [p for p in [
+        _shape(df_age,    F.col("age_range"), F.lit("")),
+        _shape(df_gender, F.lit(""),          F.col("gender")),
+    ] if p is not None]
+
+    if not parts:
+        return
+
+    combined = parts[0] if len(parts) == 1 else parts[0].unionByName(parts[1])
+    combined.persist()
+    write_ch(combined, "marketing_db.gad_demographic_report")
+    write_ch(
+        combined.select(
+            "date", "account_id", "campaign_id", "adgroup_id",
+            "age_range", "gender", "device",
+            "impressions", "clicks", "cost", "conversions", "all_conversions",
+            "ctr", "average_cpc", "cost_per_conversion",
+        ),
+        "marketing_db.fact_gg_demographic_daily",
+    )
+    combined.unpersist()
+
+
+def process_gg_ad_asset(df) -> None:
+    valid = df.filter(F.col("ad_id").isNotNull() & F.col("asset_id").isNotNull())
+    valid.persist()
+
+    write_ch(
+        valid.select(
+            F.col("asset_id"),
+            F.coalesce(F.col("ad_id"), F.lit("")).alias("ad_id"),
+            F.coalesce(F.col("asset_name"), F.lit("")).alias("asset_name"),
+            F.coalesce(F.col("asset_type"), F.lit("")).alias("asset_type"),
+            F.coalesce(F.col("asset_text"), F.lit("")).alias("asset_text"),
+            F.coalesce(F.col("image_url"), F.lit("")).alias("image_url"),
+        ).dropDuplicates(["asset_id"]),
+        "marketing_db.dim_gg_asset",
+    )
+    write_ch(
+        valid.select(
+            F.col("ad_id"), F.col("asset_id"),
+            F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
+            F.col("campaign_id"),
+            F.coalesce(F.col("campaign_name"), F.lit("")).alias("campaign_name"),
+            F.col("adgroup_id"),
+            F.coalesce(F.col("adgroup_name"), F.lit("")).alias("adgroup_name"),
+            F.coalesce(F.col("asset_name"), F.lit("")).alias("asset_name"),
+            F.coalesce(F.col("asset_type"), F.lit("")).alias("asset_type"),
+            F.coalesce(F.col("asset_text"), F.lit("")).alias("asset_text"),
+            F.coalesce(F.col("image_url"), F.lit("")).alias("image_url"),
+            F.coalesce(F.col("asset_performance"), F.lit("")).alias("asset_performance"),
+            F.coalesce(F.col("impressions").cast("int"),     F.lit(0)).alias("impressions"),
+            F.coalesce(F.col("clicks").cast("int"),          F.lit(0)).alias("clicks"),
+            F.coalesce(F.col("ctr").cast("float"),           F.lit(0.0)).alias("ctr"),
+            F.coalesce(F.col("all_conversions").cast("int"), F.lit(0)).alias("all_conversions"),
+            F.coalesce(F.col("cost").cast("float"),          F.lit(0.0)).alias("cost"),
+            F.col("account_id"),
+            F.coalesce(F.col("account_name"), F.lit("")).alias("account_name"),
+        ),
+        "marketing_db.gad_ad_asset_daily_report",
+    )
+    write_ch(
+        valid.select(
+            F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
+            F.col("account_id"), F.col("campaign_id"), F.col("adgroup_id"),
+            F.col("ad_id"), F.col("asset_id"),
+            F.coalesce(F.col("asset_performance"), F.lit("")).alias("asset_performance"),
+            F.coalesce(F.col("impressions").cast("int"),     F.lit(0)).alias("impressions"),
+            F.coalesce(F.col("clicks").cast("int"),          F.lit(0)).alias("clicks"),
+            F.coalesce(F.col("cost").cast("float"),          F.lit(0.0)).alias("cost"),
+            F.coalesce(F.col("all_conversions").cast("int"), F.lit(0)).alias("all_conversions"),
+            F.coalesce(F.col("ctr").cast("float"),           F.lit(0.0)).alias("ctr"),
+        ),
+        "marketing_db.fact_gg_asset_daily",
+    )
+    valid.unpersist()
+
+
+def process_gg_click_type(df) -> None:
+    valid = df.filter(F.col("campaign_id").isNotNull() & F.col("click_type").isNotNull())
+    flat = valid.select(
+        F.col("campaign_id"),
+        F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
+        F.col("click_type"),
+        F.coalesce(F.col("campaign_name"), F.lit("")).alias("campaign_name"),
+        F.coalesce(F.col("campaign_status"), F.lit("")).alias("campaign_status"),
+        F.coalesce(F.col("impressions").cast("int"),     F.lit(0)).alias("impressions"),
+        F.coalesce(F.col("clicks").cast("int"),          F.lit(0)).alias("clicks"),
+        F.coalesce(F.col("ctr").cast("float"),           F.lit(0.0)).alias("ctr"),
+        F.coalesce(F.col("conversions").cast("int"),     F.lit(0)).alias("conversions"),
+        F.coalesce(F.col("all_conversions").cast("int"), F.lit(0)).alias("all_conversions"),
+        F.coalesce(F.col("device"), F.lit("UNKNOWN")).alias("device"),
+        F.coalesce(F.col("ad_network_type"), F.lit("")).alias("ad_network_type"),
+        F.coalesce(F.col("cost").cast("float"),          F.lit(0.0)).alias("cost"),
+        F.col("account_id"),
+        F.coalesce(F.col("account_name"), F.lit("")).alias("account_name"),
+    )
+    write_ch(flat, "marketing_db.gad_click_type_report")
+    write_ch(
+        flat.select(
+            "date", "account_id", "campaign_id", "click_type", "device", "ad_network_type",
+            "impressions", "clicks", "cost", "conversions", "all_conversions", "ctr",
+        ),
+        "marketing_db.fact_gg_click_type_daily",
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="MinIO to ClickHouse Batch Ingestion")
     parser.add_argument(
@@ -380,7 +637,7 @@ def main():
         print("  Mode: FULL (all data)")
     print("=" * 55)
 
-    print("\n[1/3] fad_ad_daily_report")
+    print("\n[1/9] fad_ad_daily_report")
     df_daily = read_table(spark, "fad_ad_daily_report", process_date)
     if df_daily is not None:
         df_daily.persist()
@@ -388,10 +645,45 @@ def main():
         populate_dim_date(spark, df_daily)
         df_daily.unpersist()
 
-    print("\n[2/3] fad_age_gender_detailed_report")
+    print("\n[2/9] fad_age_gender_detailed_report")
     df_demo = read_table(spark, "fad_age_gender_detailed_report", process_date)
     if df_demo is not None:
         process_age_gender(df_demo)
+
+    print("\n[3/9] gad_campaign_daily_report")
+    df_cam = read_table(spark, "gad_campaign_daily_report", process_date)
+    if df_cam is not None:
+        process_gg_campaign(df_cam)
+
+    print("\n[4/9] gad_ad_group_daily_report")
+    df_grp = read_table(spark, "gad_ad_group_daily_report", process_date)
+    if df_grp is not None:
+        process_gg_adgroup(df_grp)
+
+    print("\n[5/9] gad_account_daily_report")
+    df_acc = read_table(spark, "gad_account_daily_report", process_date)
+    if df_acc is not None:
+        process_gg_account(df_acc)
+
+    print("\n[6/9] gad_keyword_performance_report")
+    df_kw = read_table(spark, "gad_keyword_performance_report", process_date)
+    if df_kw is not None:
+        process_gg_keyword(df_kw)
+
+    print("\n[7/9] gad_age_report + gad_gender_report -> gad_demographic_report")
+    df_age    = read_table(spark, "gad_age_report",    process_date)
+    df_gender = read_table(spark, "gad_gender_report", process_date)
+    process_gg_demographic(df_age, df_gender)
+
+    print("\n[8/9] gad_ad_asset_daily_report")
+    df_asset = read_table(spark, "gad_ad_asset_daily_report", process_date)
+    if df_asset is not None:
+        process_gg_ad_asset(df_asset)
+
+    print("\n[9/9] gad_click_type_report")
+    df_ct = read_table(spark, "gad_click_type_report", process_date)
+    if df_ct is not None:
+        process_gg_click_type(df_ct)
 
     print("\n[DONE] All tables written to ClickHouse.")
     spark.stop()
