@@ -67,7 +67,17 @@ TRIGGER_INTERVAL = os.getenv("SPEED_LAYER_TRIGGER", "30 seconds")
 # Raw input topics
 TOPIC_AD_DAILY   = "fad_ad_daily_report"
 TOPIC_AGE_GENDER = "fad_age_gender_detailed_report"
-TOPIC_GOOGLE_RAW = "topic_google_raw"
+# Google raw input topics (one per report type, produced by ingest/google/mock.py)
+GG_RAW_TOPICS = ",".join([
+    "gad_campaign_daily_report",
+    "gad_ad_group_daily_report",
+    "gad_account_daily_report",
+    "gad_keyword_performance_report",
+    "gad_age_report",
+    "gad_gender_report",
+    "gad_ad_asset_daily_report",
+    "gad_click_type_report",
+])
 
 # Facebook processed output topics (1 per ClickHouse table)
 TOPIC_DIM_ACCOUNT      = "processed_dim_account"
@@ -148,16 +158,6 @@ AGE_GENDER_SCHEMA = StructType(_AD_DAILY_FIELDS + [
 ])
 
 # ── Google input schemas ───────────────────────────────────────────────────────
-
-# Outer envelope: {"metadata": {"platform": ..., "report_type": ...}, "data": "..."}
-_GG_META_SCHEMA = StructType([
-    StructField("platform",    StringType()),
-    StructField("report_type", StringType()),
-])
-GG_ENVELOPE_SCHEMA = StructType([
-    StructField("metadata", _GG_META_SCHEMA),
-    StructField("data",     StringType()),
-])
 
 _GG_CAMPAIGN_SCHEMA = StructType([
     StructField("id",              StringType()),
@@ -556,23 +556,23 @@ def process_age_gender_batch(batch_df: DataFrame, epoch_id: int) -> None:
 
 def process_google_batch(batch_df: DataFrame, epoch_id: int) -> None:
     """
-    foreachBatch handler for topic_google_raw.
-    batch_df has columns: (platform, report_type, raw_data) — envelope already parsed.
-    Dispatches by report_type and produces to 15 processed_gg_* Kafka topics.
+    foreachBatch handler for 8 gad_* Kafka topics.
+    batch_df is the raw Kafka DataFrame with (value, topic, ...) columns.
+    Dispatches by the `topic` column and produces to 15 processed_gg_* Kafka topics.
     """
     if batch_df.rdd.isEmpty():
         return
 
-    print(f"\n[epoch={epoch_id}] topic_google_raw — transforming...")
+    print(f"\n[epoch={epoch_id}] gad_* topics — transforming...")
     batch_df.persist()
 
-    def _parse(report_type, schema):
-        return batch_df.filter(F.col("report_type") == report_type).select(
-            F.from_json(F.col("raw_data"), schema).alias("d")
+    def _parse(topic_name, schema):
+        return batch_df.filter(F.col("topic") == topic_name).select(
+            F.from_json(F.col("value").cast("string"), schema).alias("d")
         ).select("d.*")
 
     # ── 1. campaign_daily ─────────────────────────────────────────────────────
-    camp = _parse("campaign_daily", _GG_CAMPAIGN_SCHEMA)
+    camp = _parse("gad_campaign_daily_report", _GG_CAMPAIGN_SCHEMA)
     camp.persist()
     base_camp = camp.filter(F.col("id").isNotNull()).select(
         F.col("id").alias("campaign_id"),
@@ -593,7 +593,7 @@ def process_google_batch(batch_df: DataFrame, epoch_id: int) -> None:
     camp.unpersist()
 
     # ── 2. ad_group_daily ─────────────────────────────────────────────────────
-    adg = _parse("ad_group_daily", _GG_ADGROUP_SCHEMA)
+    adg = _parse("gad_ad_group_daily_report", _GG_ADGROUP_SCHEMA)
     adg.persist()
     base_adg = adg.filter(F.col("id").isNotNull()).select(
         F.col("id").alias("adgroup_id"),
@@ -614,7 +614,7 @@ def process_google_batch(batch_df: DataFrame, epoch_id: int) -> None:
     adg.unpersist()
 
     # ── 3. account ────────────────────────────────────────────────────────────
-    acct = _parse("account", _GG_ACCOUNT_SCHEMA)
+    acct = _parse("gad_account_daily_report", _GG_ACCOUNT_SCHEMA)
     produce_to_kafka(
         acct.filter(F.col("account_id").isNotNull()).select(
             F.col("account_id"),
@@ -630,7 +630,7 @@ def process_google_batch(batch_df: DataFrame, epoch_id: int) -> None:
     )
 
     # ── 4. keyword ────────────────────────────────────────────────────────────
-    kw = _parse("keyword", _GG_KEYWORD_SCHEMA)
+    kw = _parse("gad_keyword_performance_report", _GG_KEYWORD_SCHEMA)
     kw.persist()
     valid_kw = kw.filter(F.col("adgroup_id").isNotNull() & F.col("keyword").isNotNull())
     produce_to_kafka(
@@ -674,8 +674,8 @@ def process_google_batch(batch_df: DataFrame, epoch_id: int) -> None:
     kw.unpersist()
 
     # ── 5. demographic (age + gender merged) ──────────────────────────────────
-    age_df    = _parse("age",    _GG_AGE_SCHEMA)
-    gender_df = _parse("gender", _GG_GENDER_SCHEMA)
+    age_df    = _parse("gad_age_report",    _GG_AGE_SCHEMA)
+    gender_df = _parse("gad_gender_report", _GG_GENDER_SCHEMA)
 
     def _shape_demo(parsed, age_col, gender_col):
         return parsed.filter(F.col("adgroup_id").isNotNull()).select(
@@ -722,7 +722,7 @@ def process_google_batch(batch_df: DataFrame, epoch_id: int) -> None:
         combined.unpersist()
 
     # ── 6. ad_asset ───────────────────────────────────────────────────────────
-    asset = _parse("ad_asset", _GG_AD_ASSET_SCHEMA)
+    asset = _parse("gad_ad_asset_daily_report", _GG_AD_ASSET_SCHEMA)
     asset.persist()
     valid_asset = asset.filter(F.col("ad_id").isNotNull() & F.col("asset_id").isNotNull())
     produce_to_kafka(
@@ -768,7 +768,7 @@ def process_google_batch(batch_df: DataFrame, epoch_id: int) -> None:
     asset.unpersist()
 
     # ── 7. click_type ─────────────────────────────────────────────────────────
-    ct = _parse("click_type", _GG_CLICK_TYPE_SCHEMA)
+    ct = _parse("gad_click_type_report", _GG_CLICK_TYPE_SCHEMA)
     valid_ct = ct.filter(F.col("campaign_id").isNotNull() & F.col("click_type").isNotNull())
     flat_ct = valid_ct.select(
         F.col("campaign_id"),
@@ -848,20 +848,13 @@ def main():
         .start()
     )
 
-    # Stream 3: topic_google_raw → 15 processed_gg_* topics
-    # Parse the envelope (outer JSON only) in the streaming graph; inner JSON
-    # per-report-type is parsed inside process_google_batch to avoid schema conflicts.
-    google_raw = read_kafka_stream(spark, TOPIC_GOOGLE_RAW)
-    parsed_google = google_raw.select(
-        F.from_json(F.col("value").cast("string"), GG_ENVELOPE_SCHEMA).alias("e")
-    ).select(
-        F.col("e.metadata.platform").alias("platform"),
-        F.col("e.metadata.report_type").alias("report_type"),
-        F.col("e.data").alias("raw_data"),
-    ).filter(F.col("platform") == "google")
+    # Stream 3: 8 gad_* topics → 15 processed_gg_* topics
+    # Subscribe to all Google raw topics in one stream; dispatch inside
+    # process_google_batch by the Kafka `topic` column.
+    google_raw = read_kafka_stream(spark, GG_RAW_TOPICS)
 
     q_google = (
-        parsed_google.writeStream
+        google_raw.writeStream
         .foreachBatch(process_google_batch)
         .option(
             "checkpointLocation",
