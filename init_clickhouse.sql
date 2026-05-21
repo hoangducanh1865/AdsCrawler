@@ -259,7 +259,7 @@ CREATE TABLE IF NOT EXISTS marketing_db.gad_keyword_performance_report
 PARTITION BY toYYYYMM(date)
 ORDER BY (adgroup_id, keyword, device, date);
 
-CREATE TABLE IF NOT EXISTS marketing_db.gad_demographic_report
+CREATE TABLE IF NOT EXISTS marketing_db.gad_age_report
 (
     adgroup_id          String,
     date                Date,
@@ -269,8 +269,7 @@ CREATE TABLE IF NOT EXISTS marketing_db.gad_demographic_report
     account_id          Nullable(String),
     account_name        Nullable(String),
     device              String,
-    age_range           String  DEFAULT '',
-    gender              String  DEFAULT '',
+    age_range           String,
     impressions         Int32   DEFAULT 0,
     clicks              Int32   DEFAULT 0,
     ctr                 Float32 DEFAULT 0,
@@ -282,7 +281,31 @@ CREATE TABLE IF NOT EXISTS marketing_db.gad_demographic_report
     updated_at          DateTime DEFAULT now()
 ) ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY toYYYYMM(date)
-ORDER BY (adgroup_id, age_range, gender, device, date);
+ORDER BY (adgroup_id, age_range, device, date);
+
+CREATE TABLE IF NOT EXISTS marketing_db.gad_gender_report
+(
+    adgroup_id          String,
+    date                Date,
+    campaign_id         String,
+    campaign_name       Nullable(String),
+    adgroup_name        Nullable(String),
+    account_id          Nullable(String),
+    account_name        Nullable(String),
+    device              String,
+    gender              String,
+    impressions         Int32   DEFAULT 0,
+    clicks              Int32   DEFAULT 0,
+    ctr                 Float32 DEFAULT 0,
+    conversions         Int32   DEFAULT 0,
+    all_conversions     Int32   DEFAULT 0,
+    average_cpc         Float32 DEFAULT 0,
+    cost_per_conversion Float32 DEFAULT 0,
+    cost                Float32 DEFAULT 0,
+    updated_at          DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY toYYYYMM(date)
+ORDER BY (adgroup_id, gender, device, date);
 
 CREATE TABLE IF NOT EXISTS marketing_db.gad_ad_asset_daily_report
 (
@@ -408,14 +431,13 @@ CREATE TABLE IF NOT EXISTS marketing_db.fact_gg_keyword_daily
 PARTITION BY toYYYYMM(date)
 ORDER BY (account_id, adgroup_id, keyword, device, date);
 
-CREATE TABLE IF NOT EXISTS marketing_db.fact_gg_demographic_daily
+CREATE TABLE IF NOT EXISTS marketing_db.fact_gg_age_daily
 (
     date                Date,
     account_id          String,
     campaign_id         String,
     adgroup_id          String,
-    age_range           String  DEFAULT '',
-    gender              String  DEFAULT '',
+    age_range           String,
     device              String,
     impressions         Int32   DEFAULT 0,
     clicks              Int32   DEFAULT 0,
@@ -428,7 +450,28 @@ CREATE TABLE IF NOT EXISTS marketing_db.fact_gg_demographic_daily
     updated_at          DateTime DEFAULT now()
 ) ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY toYYYYMM(date)
-ORDER BY (account_id, adgroup_id, age_range, gender, device, date);
+ORDER BY (account_id, adgroup_id, age_range, device, date);
+
+CREATE TABLE IF NOT EXISTS marketing_db.fact_gg_gender_daily
+(
+    date                Date,
+    account_id          String,
+    campaign_id         String,
+    adgroup_id          String,
+    gender              String,
+    device              String,
+    impressions         Int32   DEFAULT 0,
+    clicks              Int32   DEFAULT 0,
+    cost                Float32 DEFAULT 0,
+    conversions         Int32   DEFAULT 0,
+    all_conversions     Int32   DEFAULT 0,
+    ctr                 Float32 DEFAULT 0,
+    average_cpc         Float32 DEFAULT 0,
+    cost_per_conversion Float32 DEFAULT 0,
+    updated_at          DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY toYYYYMM(date)
+ORDER BY (account_id, adgroup_id, gender, device, date);
 
 CREATE TABLE IF NOT EXISTS marketing_db.fact_gg_asset_daily
 (

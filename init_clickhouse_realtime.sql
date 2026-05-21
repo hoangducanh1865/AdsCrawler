@@ -635,10 +635,10 @@ AS SELECT * FROM marketing_db.kafka_rt_gad_keyword_performance_report;
 
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 15. processed_gad_demographic_report
+-- 15. processed_gad_age_report
 -- ─────────────────────────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS marketing_db.kafka_rt_gad_demographic_report
+CREATE TABLE IF NOT EXISTS marketing_db.kafka_rt_gad_age_report
 (
     adgroup_id          String,
     date                Date,
@@ -649,6 +649,64 @@ CREATE TABLE IF NOT EXISTS marketing_db.kafka_rt_gad_demographic_report
     account_name        String,
     device              String,
     age_range           String,
+    impressions         Int32,
+    clicks              Int32,
+    ctr                 Float32,
+    conversions         Int32,
+    all_conversions     Int32,
+    average_cpc         Float32,
+    cost_per_conversion Float32,
+    cost                Float32
+) ENGINE = Kafka
+SETTINGS
+    kafka_broker_list = 'kafka:29092',
+    kafka_topic_list  = 'processed_gad_age_report',
+    kafka_group_name  = 'ch_rt_consumer',
+    kafka_format      = 'JSONEachRow';
+
+CREATE TABLE IF NOT EXISTS marketing_db.rt_gad_age_report
+(
+    adgroup_id          String,
+    date                Date,
+    campaign_id         String,
+    campaign_name       String,
+    adgroup_name        String,
+    account_id          String,
+    account_name        String,
+    device              String,
+    age_range           String,
+    impressions         Int32   DEFAULT 0,
+    clicks              Int32   DEFAULT 0,
+    ctr                 Float32 DEFAULT 0,
+    conversions         Int32   DEFAULT 0,
+    all_conversions     Int32   DEFAULT 0,
+    average_cpc         Float32 DEFAULT 0,
+    cost_per_conversion Float32 DEFAULT 0,
+    cost                Float32 DEFAULT 0,
+    updated_at          DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (adgroup_id, age_range, device, date)
+TTL date + INTERVAL 1 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS marketing_db.mv_rt_gad_age_report
+TO marketing_db.rt_gad_age_report
+AS SELECT * FROM marketing_db.kafka_rt_gad_age_report;
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 15b. processed_gad_gender_report
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS marketing_db.kafka_rt_gad_gender_report
+(
+    adgroup_id          String,
+    date                Date,
+    campaign_id         String,
+    campaign_name       String,
+    adgroup_name        String,
+    account_id          String,
+    account_name        String,
+    device              String,
     gender              String,
     impressions         Int32,
     clicks              Int32,
@@ -661,11 +719,11 @@ CREATE TABLE IF NOT EXISTS marketing_db.kafka_rt_gad_demographic_report
 ) ENGINE = Kafka
 SETTINGS
     kafka_broker_list = 'kafka:29092',
-    kafka_topic_list  = 'processed_gad_demographic_report',
+    kafka_topic_list  = 'processed_gad_gender_report',
     kafka_group_name  = 'ch_rt_consumer',
     kafka_format      = 'JSONEachRow';
 
-CREATE TABLE IF NOT EXISTS marketing_db.rt_gad_demographic_report
+CREATE TABLE IF NOT EXISTS marketing_db.rt_gad_gender_report
 (
     adgroup_id          String,
     date                Date,
@@ -675,7 +733,6 @@ CREATE TABLE IF NOT EXISTS marketing_db.rt_gad_demographic_report
     account_id          String,
     account_name        String,
     device              String,
-    age_range           String,
     gender              String,
     impressions         Int32   DEFAULT 0,
     clicks              Int32   DEFAULT 0,
@@ -687,12 +744,12 @@ CREATE TABLE IF NOT EXISTS marketing_db.rt_gad_demographic_report
     cost                Float32 DEFAULT 0,
     updated_at          DateTime DEFAULT now()
 ) ENGINE = ReplacingMergeTree(updated_at)
-ORDER BY (adgroup_id, age_range, gender, device, date)
+ORDER BY (adgroup_id, gender, device, date)
 TTL date + INTERVAL 1 DAY;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS marketing_db.mv_rt_gad_demographic_report
-TO marketing_db.rt_gad_demographic_report
-AS SELECT * FROM marketing_db.kafka_rt_gad_demographic_report;
+CREATE MATERIALIZED VIEW IF NOT EXISTS marketing_db.mv_rt_gad_gender_report
+TO marketing_db.rt_gad_gender_report
+AS SELECT * FROM marketing_db.kafka_rt_gad_gender_report;
 
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -1015,16 +1072,68 @@ AS SELECT * FROM marketing_db.kafka_rt_fact_gg_keyword_daily;
 
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 23. processed_fact_gg_demographic_daily
+-- 23. processed_fact_gg_age_daily
 -- ─────────────────────────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS marketing_db.kafka_rt_fact_gg_demographic_daily
+CREATE TABLE IF NOT EXISTS marketing_db.kafka_rt_fact_gg_age_daily
 (
     date                Date,
     account_id          String,
     campaign_id         String,
     adgroup_id          String,
     age_range           String,
+    device              String,
+    impressions         Int32,
+    clicks              Int32,
+    cost                Float32,
+    conversions         Int32,
+    all_conversions     Int32,
+    ctr                 Float32,
+    average_cpc         Float32,
+    cost_per_conversion Float32
+) ENGINE = Kafka
+SETTINGS
+    kafka_broker_list = 'kafka:29092',
+    kafka_topic_list  = 'processed_fact_gg_age_daily',
+    kafka_group_name  = 'ch_rt_consumer',
+    kafka_format      = 'JSONEachRow';
+
+CREATE TABLE IF NOT EXISTS marketing_db.rt_fact_gg_age_daily
+(
+    date                Date,
+    account_id          String,
+    campaign_id         String,
+    adgroup_id          String,
+    age_range           String,
+    device              String,
+    impressions         Int32   DEFAULT 0,
+    clicks              Int32   DEFAULT 0,
+    cost                Float32 DEFAULT 0,
+    conversions         Int32   DEFAULT 0,
+    all_conversions     Int32   DEFAULT 0,
+    ctr                 Float32 DEFAULT 0,
+    average_cpc         Float32 DEFAULT 0,
+    cost_per_conversion Float32 DEFAULT 0,
+    updated_at          DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (account_id, adgroup_id, age_range, device, date)
+TTL date + INTERVAL 1 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS marketing_db.mv_rt_fact_gg_age_daily
+TO marketing_db.rt_fact_gg_age_daily
+AS SELECT * FROM marketing_db.kafka_rt_fact_gg_age_daily;
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 23b. processed_fact_gg_gender_daily
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS marketing_db.kafka_rt_fact_gg_gender_daily
+(
+    date                Date,
+    account_id          String,
+    campaign_id         String,
+    adgroup_id          String,
     gender              String,
     device              String,
     impressions         Int32,
@@ -1038,17 +1147,16 @@ CREATE TABLE IF NOT EXISTS marketing_db.kafka_rt_fact_gg_demographic_daily
 ) ENGINE = Kafka
 SETTINGS
     kafka_broker_list = 'kafka:29092',
-    kafka_topic_list  = 'processed_fact_gg_demographic_daily',
+    kafka_topic_list  = 'processed_fact_gg_gender_daily',
     kafka_group_name  = 'ch_rt_consumer',
     kafka_format      = 'JSONEachRow';
 
-CREATE TABLE IF NOT EXISTS marketing_db.rt_fact_gg_demographic_daily
+CREATE TABLE IF NOT EXISTS marketing_db.rt_fact_gg_gender_daily
 (
     date                Date,
     account_id          String,
     campaign_id         String,
     adgroup_id          String,
-    age_range           String,
     gender              String,
     device              String,
     impressions         Int32   DEFAULT 0,
@@ -1061,12 +1169,12 @@ CREATE TABLE IF NOT EXISTS marketing_db.rt_fact_gg_demographic_daily
     cost_per_conversion Float32 DEFAULT 0,
     updated_at          DateTime DEFAULT now()
 ) ENGINE = ReplacingMergeTree(updated_at)
-ORDER BY (account_id, campaign_id, adgroup_id, age_range, gender, device, date)
+ORDER BY (account_id, adgroup_id, gender, device, date)
 TTL date + INTERVAL 1 DAY;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS marketing_db.mv_rt_fact_gg_demographic_daily
-TO marketing_db.rt_fact_gg_demographic_daily
-AS SELECT * FROM marketing_db.kafka_rt_fact_gg_demographic_daily;
+CREATE MATERIALIZED VIEW IF NOT EXISTS marketing_db.mv_rt_fact_gg_gender_daily
+TO marketing_db.rt_fact_gg_gender_daily
+AS SELECT * FROM marketing_db.kafka_rt_fact_gg_gender_daily;
 
 
 -- ─────────────────────────────────────────────────────────────────────────────

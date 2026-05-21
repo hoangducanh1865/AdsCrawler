@@ -25,7 +25,8 @@ Speed Layer: Spark Structured Streaming
     processed_gad_ad_group_daily_report
     processed_gad_account_daily_report
     processed_gad_keyword_performance_report
-    processed_gad_demographic_report
+    processed_gad_age_report
+    processed_gad_gender_report
     processed_gad_ad_asset_daily_report
     processed_gad_click_type_report
     processed_dim_gg_adgroup
@@ -33,7 +34,8 @@ Speed Layer: Spark Structured Streaming
     processed_fact_gg_campaign_daily
     processed_fact_gg_adgroup_daily
     processed_fact_gg_keyword_daily
-    processed_fact_gg_demographic_daily
+    processed_fact_gg_age_daily
+    processed_fact_gg_gender_daily
     processed_fact_gg_asset_daily
     processed_fact_gg_click_type_daily
 
@@ -96,7 +98,8 @@ TOPIC_GG_CAMPAIGN_DAILY   = "processed_gad_campaign_daily_report"
 TOPIC_GG_ADGROUP_DAILY    = "processed_gad_ad_group_daily_report"
 TOPIC_GG_ACCOUNT_DAILY    = "processed_gad_account_daily_report"
 TOPIC_GG_KEYWORD_DAILY    = "processed_gad_keyword_performance_report"
-TOPIC_GG_DEMOGRAPHIC      = "processed_gad_demographic_report"
+TOPIC_GG_AGE_REPORT       = "processed_gad_age_report"
+TOPIC_GG_GENDER_REPORT    = "processed_gad_gender_report"
 TOPIC_GG_AD_ASSET         = "processed_gad_ad_asset_daily_report"
 TOPIC_GG_CLICK_TYPE       = "processed_gad_click_type_report"
 TOPIC_DIM_GG_ADGROUP      = "processed_dim_gg_adgroup"
@@ -104,7 +107,8 @@ TOPIC_DIM_GG_ASSET        = "processed_dim_gg_asset"
 TOPIC_FACT_GG_CAMPAIGN    = "processed_fact_gg_campaign_daily"
 TOPIC_FACT_GG_ADGROUP     = "processed_fact_gg_adgroup_daily"
 TOPIC_FACT_GG_KEYWORD     = "processed_fact_gg_keyword_daily"
-TOPIC_FACT_GG_DEMOGRAPHIC = "processed_fact_gg_demographic_daily"
+TOPIC_FACT_GG_AGE         = "processed_fact_gg_age_daily"
+TOPIC_FACT_GG_GENDER      = "processed_fact_gg_gender_daily"
 TOPIC_FACT_GG_ASSET       = "processed_fact_gg_asset_daily"
 TOPIC_FACT_GG_CLICK_TYPE  = "processed_fact_gg_click_type_daily"
 
@@ -673,12 +677,10 @@ def process_google_batch(batch_df: DataFrame, epoch_id: int) -> None:
     )
     kw.unpersist()
 
-    # ── 5. demographic (age + gender merged) ──────────────────────────────────
-    age_df    = _parse("gad_age_report",    _GG_AGE_SCHEMA)
-    gender_df = _parse("gad_gender_report", _GG_GENDER_SCHEMA)
-
-    def _shape_demo(parsed, age_col, gender_col):
-        return parsed.filter(F.col("adgroup_id").isNotNull()).select(
+    # ── 5a. age breakdown ─────────────────────────────────────────────────────
+    age_df = _parse("gad_age_report", _GG_AGE_SCHEMA)
+    if not age_df.rdd.isEmpty():
+        flat_age = age_df.filter(F.col("adgroup_id").isNotNull()).select(
             F.col("adgroup_id"),
             F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
             F.col("campaign_id"),
@@ -687,8 +689,7 @@ def process_google_batch(batch_df: DataFrame, epoch_id: int) -> None:
             F.col("account_id"),
             F.coalesce(F.col("account_name"),              F.lit("")).alias("account_name"),
             F.coalesce(F.col("device"),                    F.lit("UNKNOWN")).alias("device"),
-            age_col.alias("age_range"),
-            gender_col.alias("gender"),
+            F.col("age_range"),
             F.coalesce(F.col("impressions"),               F.lit(0)).alias("impressions"),
             F.coalesce(F.col("clicks"),                    F.lit(0)).alias("clicks"),
             F.coalesce(F.col("ctr").cast("float"),         F.lit(0.0)).alias("ctr"),
@@ -698,28 +699,43 @@ def process_google_batch(batch_df: DataFrame, epoch_id: int) -> None:
             F.coalesce(F.col("cost_per_conversion").cast("float"), F.lit(0.0)).alias("cost_per_conversion"),
             F.coalesce(F.col("cost").cast("float"),        F.lit(0.0)).alias("cost"),
         )
-
-    parts = []
-    if not age_df.rdd.isEmpty():
-        parts.append(_shape_demo(age_df, F.col("age_range"), F.lit("")))
-    if not gender_df.rdd.isEmpty():
-        parts.append(_shape_demo(gender_df, F.lit(""), F.col("gender")))
-
-    if parts:
-        combined = parts[0] if len(parts) == 1 else parts[0].unionByName(parts[1])
-        combined.persist()
-        produce_to_kafka(combined, TOPIC_GG_DEMOGRAPHIC)
+        produce_to_kafka(flat_age, TOPIC_GG_AGE_REPORT)
         produce_to_kafka(
-            combined.select(
-                "date", "account_id", "campaign_id", "adgroup_id",
-                "age_range", "gender", "device",
-                "impressions", "clicks", "cost",
-                "conversions", "all_conversions",
-                "ctr", "average_cpc", "cost_per_conversion",
-            ),
-            TOPIC_FACT_GG_DEMOGRAPHIC,
+            flat_age.select("date", "account_id", "campaign_id", "adgroup_id",
+                            "age_range", "device", "impressions", "clicks", "cost",
+                            "conversions", "all_conversions", "ctr", "average_cpc", "cost_per_conversion"),
+            TOPIC_FACT_GG_AGE,
         )
-        combined.unpersist()
+
+    # ── 5b. gender breakdown ──────────────────────────────────────────────────
+    gender_df = _parse("gad_gender_report", _GG_GENDER_SCHEMA)
+    if not gender_df.rdd.isEmpty():
+        flat_gender = gender_df.filter(F.col("adgroup_id").isNotNull()).select(
+            F.col("adgroup_id"),
+            F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
+            F.col("campaign_id"),
+            F.coalesce(F.col("campaign_name"),             F.lit("")).alias("campaign_name"),
+            F.coalesce(F.col("adgroup_name"),              F.lit("")).alias("adgroup_name"),
+            F.col("account_id"),
+            F.coalesce(F.col("account_name"),              F.lit("")).alias("account_name"),
+            F.coalesce(F.col("device"),                    F.lit("UNKNOWN")).alias("device"),
+            F.col("gender"),
+            F.coalesce(F.col("impressions"),               F.lit(0)).alias("impressions"),
+            F.coalesce(F.col("clicks"),                    F.lit(0)).alias("clicks"),
+            F.coalesce(F.col("ctr").cast("float"),         F.lit(0.0)).alias("ctr"),
+            F.coalesce(F.col("conversions"),               F.lit(0)).alias("conversions"),
+            F.coalesce(F.col("all_conversions"),           F.lit(0)).alias("all_conversions"),
+            F.coalesce(F.col("average_cpc").cast("float"), F.lit(0.0)).alias("average_cpc"),
+            F.coalesce(F.col("cost_per_conversion").cast("float"), F.lit(0.0)).alias("cost_per_conversion"),
+            F.coalesce(F.col("cost").cast("float"),        F.lit(0.0)).alias("cost"),
+        )
+        produce_to_kafka(flat_gender, TOPIC_GG_GENDER_REPORT)
+        produce_to_kafka(
+            flat_gender.select("date", "account_id", "campaign_id", "adgroup_id",
+                               "gender", "device", "impressions", "clicks", "cost",
+                               "conversions", "all_conversions", "ctr", "average_cpc", "cost_per_conversion"),
+            TOPIC_FACT_GG_GENDER,
+        )
 
     # ── 6. ad_asset ───────────────────────────────────────────────────────────
     asset = _parse("gad_ad_asset_daily_report", _GG_AD_ASSET_SCHEMA)

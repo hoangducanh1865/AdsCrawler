@@ -13,7 +13,8 @@ MinIO tables consumed:
   gad_account_daily_report         -> gad_account_daily_report, dim_account
   gad_keyword_performance_report   -> gad_keyword_performance_report, dim_campaign,
                                       dim_gg_adgroup, fact_gg_keyword_daily
-  gad_age_report + gad_gender_report -> gad_demographic_report, fact_gg_demographic_daily
+  gad_age_report                     -> gad_age_report, fact_gg_age_daily
+  gad_gender_report                  -> gad_gender_report, fact_gg_gender_daily
   gad_ad_asset_daily_report        -> gad_ad_asset_daily_report, dim_gg_asset,
                                       fact_gg_asset_daily
   gad_click_type_report            -> gad_click_type_report, fact_gg_click_type_daily
@@ -485,52 +486,48 @@ def process_gg_keyword(df) -> None:
     valid.unpersist()
 
 
-def process_gg_demographic(df_age, df_gender) -> None:
-    def _shape(df, age_col, gender_col):
-        if df is None:
-            return None
-        return df.filter(F.col("adgroup_id").isNotNull()).select(
-            F.col("adgroup_id"),
-            F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
-            F.col("campaign_id"),
-            F.coalesce(F.col("campaign_name"), F.lit("")).alias("campaign_name"),
-            F.coalesce(F.col("adgroup_name"), F.lit("")).alias("adgroup_name"),
-            F.col("account_id"),
-            F.coalesce(F.col("account_name"), F.lit("")).alias("account_name"),
-            F.coalesce(F.col("device"), F.lit("UNKNOWN")).alias("device"),
-            age_col.alias("age_range"),
-            gender_col.alias("gender"),
-            F.coalesce(F.col("impressions").cast("int"),          F.lit(0)).alias("impressions"),
-            F.coalesce(F.col("clicks").cast("int"),               F.lit(0)).alias("clicks"),
-            F.coalesce(F.col("ctr").cast("float"),                F.lit(0.0)).alias("ctr"),
-            F.coalesce(F.col("conversions").cast("int"),          F.lit(0)).alias("conversions"),
-            F.coalesce(F.col("all_conversions").cast("int"),      F.lit(0)).alias("all_conversions"),
-            F.coalesce(F.col("average_cpc").cast("float"),        F.lit(0.0)).alias("average_cpc"),
-            F.coalesce(F.col("cost_per_conversion").cast("float"), F.lit(0.0)).alias("cost_per_conversion"),
-            F.coalesce(F.col("cost").cast("float"),               F.lit(0.0)).alias("cost"),
-        )
-
-    parts = [p for p in [
-        _shape(df_age,    F.col("age_range"), F.lit("")),
-        _shape(df_gender, F.lit(""),          F.col("gender")),
-    ] if p is not None]
-
-    if not parts:
-        return
-
-    combined = parts[0] if len(parts) == 1 else parts[0].unionByName(parts[1])
-    combined.persist()
-    write_ch(combined, "marketing_db.gad_demographic_report")
-    write_ch(
-        combined.select(
-            "date", "account_id", "campaign_id", "adgroup_id",
-            "age_range", "gender", "device",
-            "impressions", "clicks", "cost", "conversions", "all_conversions",
-            "ctr", "average_cpc", "cost_per_conversion",
-        ),
-        "marketing_db.fact_gg_demographic_daily",
+def _gg_breakdown_select(df, dim_col, dim_name):
+    return df.filter(F.col("adgroup_id").isNotNull()).select(
+        F.col("adgroup_id"),
+        F.to_date(F.col("date"), "yyyy-MM-dd").alias("date"),
+        F.col("campaign_id"),
+        F.coalesce(F.col("campaign_name"), F.lit("")).alias("campaign_name"),
+        F.coalesce(F.col("adgroup_name"), F.lit("")).alias("adgroup_name"),
+        F.col("account_id"),
+        F.coalesce(F.col("account_name"), F.lit("")).alias("account_name"),
+        F.coalesce(F.col("device"), F.lit("UNKNOWN")).alias("device"),
+        F.col(dim_col).alias(dim_name),
+        F.coalesce(F.col("impressions").cast("int"),           F.lit(0)).alias("impressions"),
+        F.coalesce(F.col("clicks").cast("int"),                F.lit(0)).alias("clicks"),
+        F.coalesce(F.col("ctr").cast("float"),                 F.lit(0.0)).alias("ctr"),
+        F.coalesce(F.col("conversions").cast("int"),           F.lit(0)).alias("conversions"),
+        F.coalesce(F.col("all_conversions").cast("int"),       F.lit(0)).alias("all_conversions"),
+        F.coalesce(F.col("average_cpc").cast("float"),         F.lit(0.0)).alias("average_cpc"),
+        F.coalesce(F.col("cost_per_conversion").cast("float"), F.lit(0.0)).alias("cost_per_conversion"),
+        F.coalesce(F.col("cost").cast("float"),                F.lit(0.0)).alias("cost"),
     )
-    combined.unpersist()
+
+
+def process_gg_age(df) -> None:
+    flat = _gg_breakdown_select(df, "age_range", "age_range")
+    write_ch(flat, "marketing_db.gad_age_report")
+    write_ch(
+        flat.select("date", "account_id", "campaign_id", "adgroup_id",
+                    "age_range", "device", "impressions", "clicks", "cost",
+                    "conversions", "all_conversions", "ctr", "average_cpc", "cost_per_conversion"),
+        "marketing_db.fact_gg_age_daily",
+    )
+
+
+def process_gg_gender(df) -> None:
+    flat = _gg_breakdown_select(df, "gender", "gender")
+    write_ch(flat, "marketing_db.gad_gender_report")
+    write_ch(
+        flat.select("date", "account_id", "campaign_id", "adgroup_id",
+                    "gender", "device", "impressions", "clicks", "cost",
+                    "conversions", "all_conversions", "ctr", "average_cpc", "cost_per_conversion"),
+        "marketing_db.fact_gg_gender_daily",
+    )
 
 
 def process_gg_ad_asset(df) -> None:
@@ -670,10 +667,15 @@ def main():
     if df_kw is not None:
         process_gg_keyword(df_kw)
 
-    print("\n[7/9] gad_age_report + gad_gender_report -> gad_demographic_report")
-    df_age    = read_table(spark, "gad_age_report",    process_date)
+    print("\n[7/9] gad_age_report")
+    df_age = read_table(spark, "gad_age_report", process_date)
+    if df_age is not None:
+        process_gg_age(df_age)
+
+    print("\n[7b/9] gad_gender_report")
     df_gender = read_table(spark, "gad_gender_report", process_date)
-    process_gg_demographic(df_age, df_gender)
+    if df_gender is not None:
+        process_gg_gender(df_gender)
 
     print("\n[8/9] gad_ad_asset_daily_report")
     df_asset = read_table(spark, "gad_ad_asset_daily_report", process_date)
