@@ -1,13 +1,29 @@
 -- 1. PieChart ~ Filter
-SELECT 
-    dc.campaign_name,
-    f.date_start,
+-- Cấp dữ liệu: 1 dòng / campaign / day để Superset có thể rollup theo Time Grain (day/week/month/quarter/year).
+SELECT
+    f.date_start AS date_start,
+    dd.year AS year,
+    dd.quarter AS quarter,
+    dd.month AS month,
+    dd.month_name AS month_name,
+    dd.week AS week,
+    ds.campaign_id AS campaign_id,
+    dc.campaign_name AS campaign_name,
     SUM(f.spend) AS total_spend
 FROM marketing_db.fact_fb_ad_daily f
 JOIN marketing_db.dim_ad da ON f.ad_id = da.ad_id
 JOIN marketing_db.dim_adset ds ON da.adset_id = ds.adset_id
 JOIN marketing_db.dim_campaign dc ON ds.campaign_id = dc.campaign_id
-GROUP BY dc.campaign_name, f.date_start;
+JOIN marketing_db.dim_date dd ON f.date_start = dd.date
+GROUP BY
+    f.date_start,
+    dd.year,
+    dd.quarter,
+    dd.month,
+    dd.month_name,
+    dd.week,
+    ds.campaign_id,
+    dc.campaign_name;
 
 
 -- 2. BIỂU ĐỒ CHI TIẾT (Trendline, Big Number, Bảng biểu...)
@@ -354,3 +370,179 @@ FROM (
     JOIN marketing_db.dim_adset ds ON da.adset_id = ds.adset_id
     JOIN marketing_db.dim_campaign dc ON ds.campaign_id = dc.campaign_id
 ) AS base;
+
+-- =============================================================================
+-- GOOGLE ADS DATASETS FOR SUPERSET VISUALIZATION (SNOWFLAKE SCHEMA: DIMS & FACTS)
+-- =============================================================================
+
+-- 3. BIỂU ĐỒ GOOGLE ADS TỔNG QUAN CHI TIẾT (Time-Series / Line Chart & Big Number)
+-- CPM: Cost per mile (Chi phí trên 1000 lượt hiển thị)
+-- CTR: Click through rate (Tỷ lệ nhấp chuột)
+-- CPC: Cost per click (Chi phí trên mỗi lượt nhấp)
+-- Cost per Conversion: Chi phí trên mỗi lượt chuyển đổi thành công
+SELECT 
+    f.date,
+    dc.campaign_name,
+    SUM(f.cost) AS total_spend,
+    SUM(f.impressions) AS total_impressions,
+    SUM(f.clicks) AS total_clicks,
+    SUM(f.all_conversions) AS total_conversions,
+    (SUM(f.clicks) / nullIf(SUM(f.impressions), 0)) * 100 AS ctr,
+    SUM(f.cost) / nullIf(SUM(f.clicks), 0) AS cpc,
+    (SUM(f.cost) / nullIf(SUM(f.impressions), 0)) * 1000 AS cpm,
+    SUM(f.cost) / nullIf(SUM(f.all_conversions), 0) AS cost_per_conversion
+FROM marketing_db.fact_gg_campaign_daily f
+JOIN marketing_db.dim_campaign dc ON f.campaign_id = dc.campaign_id
+GROUP BY f.date, dc.campaign_name
+ORDER BY f.date ASC;
+
+
+-- 4A. PHÂN TÍCH ĐỘ TUỔI & THIẾT BỊ GOOGLE ADS (Pie Chart / Bar Chart / Heatmap)
+-- Dùng fact_gg_age_daily để vẽ tỷ lệ Spend, Impressions, Conversions theo age_range và device.
+SELECT 
+    f.date,
+    dc.campaign_name,
+    f.device,
+    multiIf(
+        f.age_range = 'AGE_RANGE_18_24', '18-24',
+        f.age_range = 'AGE_RANGE_25_34', '25-34',
+        f.age_range = 'AGE_RANGE_35_44', '35-44',
+        f.age_range = 'AGE_RANGE_45_54', '45-54',
+        f.age_range = 'AGE_RANGE_55_64', '55-64',
+        f.age_range = 'AGE_RANGE_65_UP', '65+',
+        f.age_range = 'AGE_RANGE_UNDETERMINED', 'Unknown',
+        f.age_range
+    ) AS age_range,
+    multiIf(
+        f.age_range = 'AGE_RANGE_18_24', 1,
+        f.age_range = 'AGE_RANGE_25_34', 2,
+        f.age_range = 'AGE_RANGE_35_44', 3,
+        f.age_range = 'AGE_RANGE_45_54', 4,
+        f.age_range = 'AGE_RANGE_55_64', 5,
+        f.age_range = 'AGE_RANGE_65_UP', 6,
+        99
+    ) AS age_order,
+    SUM(f.cost) AS total_spend,
+    SUM(f.impressions) AS total_impressions,
+    SUM(f.clicks) AS total_clicks,
+    SUM(f.all_conversions) AS total_conversions,
+    (SUM(f.clicks) / nullIf(SUM(f.impressions), 0)) * 100 AS ctr,
+    SUM(f.cost) / nullIf(SUM(f.clicks), 0) AS cpc,
+    SUM(f.cost) / nullIf(SUM(f.all_conversions), 0) AS cost_per_conversion
+FROM marketing_db.fact_gg_age_daily f
+JOIN marketing_db.dim_campaign dc ON f.campaign_id = dc.campaign_id
+WHERE f.age_range != ''
+GROUP BY f.date, dc.campaign_name, f.device, age_range, age_order
+ORDER BY f.date ASC, age_order ASC;
+
+
+-- 4B. PHÂN TÍCH GIỚI TÍNH & THIẾT BỊ GOOGLE ADS (Pie Chart / Bar Chart / Heatmap)
+-- Dùng fact_gg_gender_daily để vẽ tỷ lệ Spend, Impressions, Conversions theo gender và device.
+SELECT 
+    f.date,
+    dc.campaign_name,
+    f.device,
+    f.gender,
+    SUM(f.cost) AS total_spend,
+    SUM(f.impressions) AS total_impressions,
+    SUM(f.clicks) AS total_clicks,
+    SUM(f.all_conversions) AS total_conversions,
+    (SUM(f.clicks) / nullIf(SUM(f.impressions), 0)) * 100 AS ctr,
+    SUM(f.cost) / nullIf(SUM(f.clicks), 0) AS cpc,
+    SUM(f.cost) / nullIf(SUM(f.all_conversions), 0) AS cost_per_conversion
+FROM marketing_db.fact_gg_gender_daily f
+JOIN marketing_db.dim_campaign dc ON f.campaign_id = dc.campaign_id
+WHERE f.gender != ''
+GROUP BY f.date, dc.campaign_name, f.device, f.gender
+ORDER BY f.date ASC, f.gender ASC;
+
+
+-- 5. HIỆU QUẢ TỪ KHÓA & ĐIỂM CHẤT LƯỢNG (Scatter Plot / Bubble Chart / Table)
+-- Vẽ Scatter/Bubble với X = avg_quality_score, Y = cpc, Bubble Size = total_spend, Series = keyword.
+-- Giúp nhận diện từ khóa đắt/rẻ và mức độ tối ưu dựa trên Quality Score.
+SELECT
+    f.date,
+    dc.campaign_name,
+    dg.adgroup_name,
+    f.keyword,
+    f.device,
+    AVG(f.quality_score) AS avg_quality_score,
+    SUM(f.cost) AS total_spend,
+    SUM(f.impressions) AS total_impressions,
+    SUM(f.clicks) AS total_clicks,
+    SUM(f.conversions) AS total_conversions,
+    (SUM(f.clicks) / nullIf(SUM(f.impressions), 0)) * 100 AS ctr,
+    SUM(f.cost) / nullIf(SUM(f.clicks), 0) AS cpc,
+    SUM(f.cost) / nullIf(SUM(f.conversions), 0) AS cost_per_conversion
+FROM marketing_db.fact_gg_keyword_daily f
+JOIN marketing_db.dim_campaign dc ON f.campaign_id = dc.campaign_id
+JOIN marketing_db.dim_gg_adgroup dg ON f.adgroup_id = dg.adgroup_id
+GROUP BY f.date, dc.campaign_name, dg.adgroup_name, f.keyword, f.device
+ORDER BY total_spend DESC;
+
+
+-- 6. PHÂN TÍCH HIỆU QUẢ NỘI DUNG SÁNG TẠO - ASSET (Bar Chart / Pivot Table)
+-- Dành cho Creative Analytics: so sánh hiệu quả giữa các Headline, Image, Description và đánh giá Performance (BEST, GOOD, LOW).
+SELECT
+    f.date,
+    dc.campaign_name,
+    dg.adgroup_name,
+    da.asset_name,
+    da.asset_type,
+    f.asset_performance,
+    SUM(f.cost) AS total_spend,
+    SUM(f.impressions) AS total_impressions,
+    SUM(f.clicks) AS total_clicks,
+    (SUM(f.clicks) / nullIf(SUM(f.impressions), 0)) * 100 AS ctr,
+    SUM(f.all_conversions) AS total_conversions
+FROM marketing_db.fact_gg_asset_daily f
+JOIN marketing_db.dim_campaign dc ON f.campaign_id = dc.campaign_id
+JOIN marketing_db.dim_gg_adgroup dg ON f.adgroup_id = dg.adgroup_id
+JOIN marketing_db.dim_gg_asset da ON f.asset_id = da.asset_id
+GROUP BY f.date, dc.campaign_name, dg.adgroup_name, da.asset_name, da.asset_type, f.asset_performance
+ORDER BY total_spend DESC;
+
+
+-- 7. PHÂN TÍCH LOẠI CLICK VÀ MẠNG QUẢNG CÁO (Sunburst Chart / Stacked Bar Chart)
+-- So sánh phân bổ và hiệu quả của các loại Click (Headline, Sitelines, Call, v.v...) trên các Ad Networks (Search, Display).
+SELECT
+    f.date,
+    dc.campaign_name,
+    f.click_type,
+    f.device,
+    f.ad_network_type,
+    SUM(f.cost) AS total_spend,
+    SUM(f.impressions) AS total_impressions,
+    SUM(f.clicks) AS total_clicks,
+    SUM(f.conversions) AS total_conversions,
+    (SUM(f.clicks) / nullIf(SUM(f.impressions), 0)) * 100 AS ctr
+FROM marketing_db.fact_gg_click_type_daily f
+JOIN marketing_db.dim_campaign dc ON f.campaign_id = dc.campaign_id
+GROUP BY f.date, dc.campaign_name, f.click_type, f.device, f.ad_network_type
+ORDER BY total_spend DESC;
+
+
+-- 8. PieChart ~ Filter cho Google Ads (Tỷ lệ phân bổ ngân sách theo Campaign)
+-- Cấp dữ liệu: 1 dòng / campaign / day để Superset có thể rollup theo Time Grain (day/week/month/quarter/year).
+SELECT
+    f.date AS date,
+    dd.year AS year,
+    dd.quarter AS quarter,
+    dd.month AS month,
+    dd.month_name AS month_name,
+    dd.week AS week,
+    f.campaign_id AS campaign_id,
+    dc.campaign_name AS campaign_name,
+    SUM(f.cost) AS total_spend
+FROM marketing_db.fact_gg_campaign_daily f
+JOIN marketing_db.dim_campaign dc ON f.campaign_id = dc.campaign_id
+JOIN marketing_db.dim_date dd ON f.date = dd.date
+GROUP BY
+    f.date,
+    dd.year,
+    dd.quarter,
+    dd.month,
+    dd.month_name,
+    dd.week,
+    f.campaign_id,
+    dc.campaign_name;
