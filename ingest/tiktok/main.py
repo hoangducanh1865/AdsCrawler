@@ -1,0 +1,77 @@
+# ingest/tiktok/main.py
+
+import os
+import argparse
+from datetime import datetime, timedelta
+from .mock import MockGenerator
+
+def run_ingestion(mode="mock", start_date=None, end_date=None, options=None, output_mode="minio"):
+    options = options or {}
+
+    # Default date configuration: last 20 days if not provided
+    if not end_date:
+        end_date = datetime.now().strftime("%Y-%m-%d")
+    if not start_date:
+        days = options.get('days', 20)
+        start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    if mode == "mock":
+        seed = options.get('seed', "tiktok_mkt_seed_2026")
+        target = "Kafka" if output_mode == "kafka" else "MinIO"
+        print(f">>> Bắt đầu sinh dữ liệu ảo TikTok DETERMINISTIC (Seed: {seed})")
+        print(f">>> Đẩy vào {target} từ {start_date} đến {end_date}...")
+
+        generator = MockGenerator(
+            endpoint=os.getenv('MINIO_ENDPOINT', 'localhost:9005'),
+            access_key=os.getenv('MINIO_ACCESS_KEY', 'admin'),
+            secret_key=os.getenv('MINIO_SECRET_KEY', 'password123'),
+            enable_xlsx_buffer=options.get('xlsx', False),
+            output_mode=output_mode,
+            kafka_bootstrap_servers=os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092'),
+        )
+
+        try:
+            generator.generate_consistent_suite(start_date, end_date, options={"seed": seed, **options})
+
+            if options.get('xlsx'):
+                print(">>> Hoàn tất sinh dữ liệu. Đang xuất file Excel...")
+                generator.export_to_xlsx("tiktok_mock_report.xlsx")
+
+            print(f">>> SUCCESS: Dữ liệu TikTok đã sẵn sàng trên {target}")
+        except Exception as e:
+            print(f"!!! Lỗi khi sinh dữ liệu TikTok: {e}")
+            import traceback
+            traceback.print_exc()
+
+    elif mode == "real":
+        print(">>> Bắt đầu lấy dữ liệu THẬT từ TikTok Ads API (Not implemented yet)...")
+
+    else:
+        print(f"!!! Mode '{mode}' không hợp lệ. Sử dụng 'mock' hoặc 'real'.")
+
+def main():
+    parser = argparse.ArgumentParser(description="TikTok Ads Ingestion Tool")
+    parser.add_argument("--mode", type=str, default="mock", choices=["mock", "real"], help="Ingestion mode")
+    parser.add_argument("--output", type=str, default="minio", choices=["minio", "kafka"], help="Output target: minio (direct) or kafka")
+    parser.add_argument("--xlsx", action="store_true", default=False, help="Export mock data to Excel")
+    parser.add_argument("--days", type=int, default=20, help="Days of data to generate")
+    parser.add_argument("--start-date", "--date-start", type=str, dest="start_date", help="Start date (YYYY-MM-DD)")
+    parser.add_argument("--end-date", "--date-stop", type=str, dest="end_date", help="End date (YYYY-MM-DD)")
+    parser.add_argument("--seed", type=str, default="tiktok_mkt_seed_2026", help="Seed for mock data")
+
+    args = parser.parse_args()
+
+    options = {
+        "xlsx": args.xlsx,
+        "days": args.days,
+        "seed": args.seed,
+        "accountCount": 2,
+        "campaignCount": 3,
+        "adGroupCount": 3,
+        "adCount": 2
+    }
+
+    run_ingestion(mode=args.mode, start_date=args.start_date, end_date=args.end_date, options=options, output_mode=args.output)
+
+if __name__ == "__main__":
+    main()

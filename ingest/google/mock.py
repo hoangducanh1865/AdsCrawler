@@ -84,6 +84,51 @@ class MockGenerator:
         if month == 3 and 5 <= day <= 8: multiplier *= 2.0
         return multiplier
 
+    def _analyze_targeting_bias(self, name):
+        bias = {}
+        name_lower = name.lower()
+        if "phụ nữ" in name_lower or "nữ" in name_lower:
+            bias["gender"] = "FEMALE"
+        elif "nam giới" in name_lower or "nam" in name_lower or "bạn gái" in name_lower:
+            bias["gender"] = "MALE"
+
+        if "ceo" in name_lower or "quản lý" in name_lower or "cao cấp" in name_lower:
+            bias["age_range"] = (35, 65)
+        elif "18-24" in name_lower or "sinh viên" in name_lower:
+            bias["age_range"] = (18, 24)
+        return bias
+
+    def _get_item_weight(self, item, key_name, rng, bias):
+        if key_name == "age_range":
+            age = item
+            weight = 1.0
+            if age in ["AGE_RANGE_25_34", "AGE_RANGE_35_44"]: weight = 3.0
+            elif age in ["AGE_RANGE_65_UP", "AGE_RANGE_UNDETERMINED"]: weight = 0.3
+
+            if "age_range" in bias:
+                try:
+                    parts = age.split('_')
+                    if len(parts) >= 3 and parts[2].isdigit():
+                        p_min = int(parts[2])
+                        if p_min < bias["age_range"][0] or p_min > bias["age_range"][1]:
+                            weight *= 0.05
+                    elif "65_UP" in age:
+                        if 65 < bias["age_range"][0] or 65 > bias["age_range"][1]:
+                            weight *= 0.05
+                except Exception as e:
+                    print(e)
+            return weight * rng.uniform(0.8, 1.2)
+
+        elif key_name == "gender":
+            gender = item
+            weight = 1.0
+            if gender == "UNDETERMINED": weight = 0.2
+            if "gender" in bias and bias["gender"] != gender:
+                weight = 0.01
+            return weight * rng.uniform(0.8, 1.2)
+
+        return rng.uniform(0.5, 1.5)
+
     def _sum_metrics(self, target, source):
         keys = ["cost", "impressions", "clicks", "all_conversions"]
         for k in keys:
@@ -348,6 +393,14 @@ class MockGenerator:
                         def distribute_grp(items, key_name, extra_fields=None):
                             res = []
                             rem = {k: grp_data[k] for k in ["impressions", "clicks", "cost", "all_conversions"]}
+
+                            # Pre-calculate weights for all items
+                            dist_rng = random.Random(f"{grp['id']}_{date}_{key_name}")
+                            bias = self._analyze_targeting_bias(grp["name"])
+                            weights = [self._get_item_weight(item, key_name, dist_rng, bias) for item in items]
+                            total_weight = sum(weights) or 1.0
+                            normalized_weights = [w / total_weight for w in weights]
+
                             for i, item in enumerate(items):
                                 row = {
                                     "adgroup_id": grp["id"], "date": date, "campaign_id": cam["id"], "campaign_name": cam["name"],
@@ -362,9 +415,7 @@ class MockGenerator:
                                 if i == len(items) - 1:
                                     for k in rem: row[k] = rem[k]
                                 else:
-                                    # Deterministic share based on group+date
-                                    share_rng = random.Random(f"{grp['id']}_{date}_{i}")
-                                    share = share_rng.uniform(0.5, 1.5) / len(items)
+                                    share = normalized_weights[i]
                                     for k in rem:
                                         val = int(grp_data[k] * share) if k != "cost" else grp_data[k] * share
                                         row[k] = val
