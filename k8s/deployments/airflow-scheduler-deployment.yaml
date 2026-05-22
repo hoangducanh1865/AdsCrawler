@@ -40,4 +40,4 @@ spec:
       volumes:
         - name: dags
           hostPath:
-            path: /opt/airflow/dags
+            path: /opt/spark/work-dir/airflow/dags

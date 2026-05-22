@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-connect-init
+  namespace: marketing
+spec:
+  template:
+    metadata:
+      labels:
+        app: kafka-connect-init
+    spec:
+      containers:
+        - name: init
+          image: curlimages/curl:latest
+          volumeMounts:
+            - mountPath: /s3-config.json
+              name: s3-config
+            - mountPath: /jdbc-config.json
+              name: jdbc-config
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Waiting for Kafka Connect API..."
+              until curl -s -f http://kafka-connect:8083/connectors > /dev/null; do
+                sleep 5
+              done
+              echo "Kafka Connect is ready!"
+              
+              echo "Registering S3 Sink Connector..."
+              curl -s -X PUT http://kafka-connect:8083/connectors/minio-s3-sink/config \
+                -H "Content-Type: application/json" \
+                -d @/s3-config.json
+                
+              echo "Registering JDBC Sink Connector..."
+              curl -s -X PUT http://kafka-connect:8083/connectors/clickhouse-jdbc-sink/config \
+                -H "Content-Type: application/json" \
+                -d @/jdbc-config.json
+                
+              echo "All connectors successfully registered!"
+      volumes:
+        - name: s3-config
+          hostPath:
+            path: /opt/spark/work-dir/kafka-connect/connect-s3-sink.json
+            type: File
+        - name: jdbc-config
+          hostPath:
+            path: /opt/spark/work-dir/kafka-connect/connect-jdbc-sink.json
+            type: File
+      restartPolicy: OnFailure
