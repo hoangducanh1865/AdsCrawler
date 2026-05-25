@@ -23,10 +23,14 @@ with DAG(
     tags=['marketing', 'kafka', 'minio', 'mock']
 ) as dag:
 
+    t_setup_deps = BashOperator(
+        task_id='setup_dependencies',
+        bash_command="pip install --quiet --no-cache-dir minio openpyxl pandas confluent-kafka"
+    )
+
     t0_mock_facebook = BashOperator(
         task_id='mock_generation_facebook',
         bash_command="""
-            pip install --quiet minio openpyxl pandas confluent-kafka &&
             cd /opt/spark/work-dir &&
             export PYTHONPATH=$PYTHONPATH:/opt/spark/work-dir &&
             export KAFKA_BOOTSTRAP_SERVERS=kafka:29092 &&
@@ -38,7 +42,6 @@ with DAG(
     t0_mock_google = BashOperator(
         task_id='mock_generation_google',
         bash_command="""
-            pip install --quiet minio openpyxl pandas confluent-kafka &&
             cd /opt/spark/work-dir &&
             export PYTHONPATH=$PYTHONPATH:/opt/spark/work-dir &&
             export KAFKA_BOOTSTRAP_SERVERS=kafka:29092 &&
@@ -50,7 +53,6 @@ with DAG(
     t0_mock_tiktok = BashOperator(
         task_id='mock_generation_tiktok',
         bash_command="""
-            pip install --quiet minio openpyxl pandas confluent-kafka &&
             cd /opt/spark/work-dir &&
             export PYTHONPATH=$PYTHONPATH:/opt/spark/work-dir &&
             export KAFKA_BOOTSTRAP_SERVERS=kafka:29092 &&
@@ -80,6 +82,6 @@ with DAG(
         """
     )
 
-    # DAG: Mock → Kafka → (wait flush) → Spark reads MinIO → ClickHouse
-    [t0_mock_facebook, t0_mock_google, t0_mock_tiktok] >> t_wait_flush >> t1_minio_ingest
+    # DAG: Setup deps -> Mock → Kafka → (wait flush) → Spark reads MinIO → ClickHouse
+    t_setup_deps >> [t0_mock_facebook, t0_mock_google, t0_mock_tiktok] >> t_wait_flush >> t1_minio_ingest
 
