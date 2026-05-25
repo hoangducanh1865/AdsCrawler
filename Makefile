@@ -35,13 +35,16 @@ spark-ui:
 kafka-connect-ui:
 	minikube service kafka-connect -n marketing
 
+clickhouse-ui:
+	minikube service clickhouse -n marketing
+
 # --- Speed Layer (Spark Structured Streaming) ---
 
 speed-layer:
-	docker compose up -d speed-layer
+	kubectl rollout restart deployment/speed-layer -n marketing
 
 speed-layer-logs:
-	docker compose logs -f speed-layer
+	kubectl logs -n marketing -l app=speed-layer --tail=100 -f
 
 # --- Docker Compose (local dev) ---
 

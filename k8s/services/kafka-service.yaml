@@ -14,4 +14,5 @@ spec:
     - name: internal
       port: 29092
       targetPort: 29092
+      nodePort: 30029
   type: NodePort

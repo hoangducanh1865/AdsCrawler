@@ -59,6 +59,13 @@ spec:
                 https://repo1.maven.org/maven2/com/clickhouse/clickhouse-jdbc/0.3.2/clickhouse-jdbc-0.3.2-all.jar
               echo "Starting Kafka Connect..."
               /etc/confluent/docker/run
+          readinessProbe:
+            httpGet:
+              path: /connectors
+              port: 8083
+            initialDelaySeconds: 90
+            periodSeconds: 15
+            failureThreshold: 10
           resources:
             requests:
               memory: "512Mi"

@@ -43,3 +43,4 @@ spec:
         - name: dags
           hostPath:
             path: /opt/spark/work-dir/airflow/dags
+            type: DirectoryOrCreate

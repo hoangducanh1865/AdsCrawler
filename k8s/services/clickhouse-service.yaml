@@ -10,7 +10,9 @@ spec:
     - name: http
       port: 8123
       targetPort: 8123
+      nodePort: 30123
     - name: native
       port: 9000
       targetPort: 9000
-  type: ClusterIP
+      nodePort: 30900
+  type: NodePort
