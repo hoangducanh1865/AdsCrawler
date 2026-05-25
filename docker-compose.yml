@@ -177,7 +177,7 @@ services:
   #     "
 
   spark-master:
-    image: apache/spark:3.5.1
+    image: apache/spark:3.5.3
     container_name: mkt_spark_master
     # Phải có lệnh này thì container mới không thoát (exit)
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
@@ -190,7 +190,7 @@ services:
       - marketing-net
 
   spark-worker:
-    image: apache/spark:3.5.1
+    image: apache/spark:3.5.3
     container_name: mkt_spark_worker
     # Lệnh khởi động worker trỏ về master
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
