@@ -47,6 +47,18 @@ with DAG(
         """
     )
 
+    t0_mock_tiktok = BashOperator(
+        task_id='mock_generation_tiktok',
+        bash_command="""
+            pip install --quiet minio openpyxl pandas confluent-kafka &&
+            cd /opt/spark/work-dir &&
+            export PYTHONPATH=$PYTHONPATH:/opt/spark/work-dir &&
+            export KAFKA_BOOTSTRAP_SERVERS=kafka:29092 &&
+            python3 -m ingest.tiktok.main --mode mock --output kafka \
+                --start-date {{ ds }} --end-date {{ ds }}
+        """
+    )
+
     # Wait for Kafka Connect to flush data to MinIO
     t_wait_flush = BashOperator(
         task_id='wait_kafka_connect_flush',
@@ -69,5 +81,5 @@ with DAG(
     )
 
     # DAG: Mock → Kafka → (wait flush) → Spark reads MinIO → ClickHouse
-    [t0_mock_facebook, t0_mock_google] >> t_wait_flush >> t1_minio_ingest
+    [t0_mock_facebook, t0_mock_google, t0_mock_tiktok] >> t_wait_flush >> t1_minio_ingest
 

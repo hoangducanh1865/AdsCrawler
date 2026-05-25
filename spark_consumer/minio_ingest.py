@@ -18,6 +18,8 @@ MinIO tables consumed:
   gad_ad_asset_daily_report        -> gad_ad_asset_daily_report, dim_gg_asset,
                                       fact_gg_asset_daily
   gad_click_type_report            -> gad_click_type_report, fact_gg_click_type_daily
+  TTA_ad_performance               -> tta_ad_performance, dim_tta_advertiser,
+                                      dim_tta_ad, fact_tta_ad_daily
 
 Run (inside Docker):
   spark-submit \
@@ -614,6 +616,123 @@ def process_gg_click_type(df) -> None:
     )
 
 
+# ── TikTok Ads batch processing ───────────────────────────────────────────────
+
+def process_tta_ad_performance(df) -> None:
+    """
+    Source  : TTA_ad_performance (mock output — single flat table)
+    Targets : tta_ad_performance  (flat/denormalized raw staging)
+              dim_tta_advertiser
+              dim_tta_ad
+              fact_tta_ad_daily
+
+    Field notes:
+      stat_time_day  : "2026-05-25 17:00:00.000" → parsed to Date
+      start_date     : "2026-05-01 00:00:00.000" → parsed to Date
+      end_date       : "2026-07-30 00:00:00.000" → parsed to Date
+      createdAt      : "2026-05-25 17:00:00.123" → parsed to DateTime
+      conversion     : singular field name (TikTok convention)
+    """
+    base = df.filter(F.col("ad_id").isNotNull()).select(
+        F.col("pkId"),
+        F.col("user_id"),
+        F.to_date(F.col("stat_time_day"), "yyyy-MM-dd HH:mm:ss.SSS").alias("stat_time_day"),
+        F.col("ad_id"),
+        F.coalesce(F.col("ad_name"),         F.lit("")).alias("ad_name"),
+        F.coalesce(F.col("ad_text"),         F.lit("")).alias("ad_text"),
+        F.coalesce(F.col("adgroup_name"),    F.lit("")).alias("adgroup_name"),
+        F.coalesce(F.col("campaign_name"),   F.lit("")).alias("campaign_name"),
+        F.col("advertiser_id"),
+        F.coalesce(F.col("advertiser_name"), F.lit("")).alias("advertiser_name"),
+        F.to_date(F.col("start_date"), "yyyy-MM-dd HH:mm:ss.SSS").alias("start_date"),
+        F.to_date(F.col("end_date"),   "yyyy-MM-dd HH:mm:ss.SSS").alias("end_date"),
+        F.coalesce(F.col("spend").cast("float"),                    F.lit(0.0)).alias("spend"),
+        F.coalesce(F.col("impressions").cast("int"),                F.lit(0)).alias("impressions"),
+        F.coalesce(F.col("clicks").cast("int"),                     F.lit(0)).alias("clicks"),
+        F.coalesce(F.col("ctr").cast("float"),                      F.lit(0.0)).alias("ctr"),
+        F.coalesce(F.col("cpc").cast("float"),                      F.lit(0.0)).alias("cpc"),
+        F.coalesce(F.col("cpm").cast("float"),                      F.lit(0.0)).alias("cpm"),
+        F.coalesce(F.col("reach").cast("int"),                      F.lit(0)).alias("reach"),
+        F.coalesce(F.col("frequency").cast("float"),                F.lit(0.0)).alias("frequency"),
+        F.coalesce(F.col("conversion").cast("int"),                 F.lit(0)).alias("conversion"),
+        F.coalesce(F.col("cost_per_conversion").cast("float"),      F.lit(0.0)).alias("cost_per_conversion"),
+        F.coalesce(F.col("conversion_rate").cast("float"),          F.lit(0.0)).alias("conversion_rate"),
+        F.coalesce(F.col("video_play_actions").cast("int"),         F.lit(0)).alias("video_play_actions"),
+        F.coalesce(F.col("profile_visits").cast("int"),             F.lit(0)).alias("profile_visits"),
+        F.coalesce(F.col("likes").cast("int"),                      F.lit(0)).alias("likes"),
+        F.coalesce(F.col("comments").cast("int"),                   F.lit(0)).alias("comments"),
+        F.coalesce(F.col("shares").cast("int"),                     F.lit(0)).alias("shares"),
+        F.coalesce(F.col("follows").cast("int"),                    F.lit(0)).alias("follows"),
+        F.coalesce(F.col("live_views").cast("int"),                 F.lit(0)).alias("live_views"),
+        F.coalesce(F.col("purchase").cast("int"),                   F.lit(0)).alias("purchase"),
+        F.coalesce(F.col("onsite_shopping").cast("int"),            F.lit(0)).alias("onsite_shopping"),
+        F.coalesce(F.col("total_onsite_shopping_value").cast("float"), F.lit(0.0)).alias("total_onsite_shopping_value"),
+        F.coalesce(F.col("onsite_shopping_roas").cast("float"),     F.lit(0.0)).alias("onsite_shopping_roas"),
+        F.coalesce(F.col("cost_per_onsite_shopping").cast("float"), F.lit(0.0)).alias("cost_per_onsite_shopping"),
+        F.to_timestamp(F.col("createdAt"), "yyyy-MM-dd HH:mm:ss.SSS").alias("createdAt"),
+        F.to_timestamp(F.col("updatedAt"), "yyyy-MM-dd HH:mm:ss.SSS").alias("updatedAt"),
+    )
+    base.persist()
+
+    # -- dim_tta_advertiser ---------------------------------------------------
+    write_ch(
+        base.select("advertiser_id", "advertiser_name")
+            .dropDuplicates(["advertiser_id"]),
+        "marketing_db.dim_tta_advertiser",
+    )
+
+    # -- dim_tta_ad -----------------------------------------------------------
+    write_ch(
+        base.select(
+            F.col("ad_id"),
+            F.col("advertiser_id"),
+            F.col("campaign_name"),
+            F.col("adgroup_name"),
+            F.col("ad_name"),
+            F.col("ad_text"),
+        ).dropDuplicates(["ad_id"]),
+        "marketing_db.dim_tta_ad",
+    )
+
+    # -- tta_ad_performance (flat/denormalized staging) -----------------------
+    write_ch(base, "marketing_db.tta_ad_performance")
+
+    # -- fact_tta_ad_daily ----------------------------------------------------
+    write_ch(
+        base.select(
+            F.col("stat_time_day").alias("date"),
+            F.col("advertiser_id"),
+            F.col("ad_id"),
+            F.col("spend"),
+            F.col("impressions"),
+            F.col("clicks"),
+            F.col("ctr"),
+            F.col("cpc"),
+            F.col("cpm"),
+            F.col("reach"),
+            F.col("frequency"),
+            F.col("conversion"),
+            F.col("cost_per_conversion"),
+            F.col("conversion_rate"),
+            F.col("video_play_actions"),
+            F.col("profile_visits"),
+            F.col("likes"),
+            F.col("comments"),
+            F.col("shares"),
+            F.col("follows"),
+            F.col("live_views"),
+            F.col("purchase"),
+            F.col("onsite_shopping"),
+            F.col("total_onsite_shopping_value"),
+            F.col("onsite_shopping_roas"),
+            F.col("cost_per_onsite_shopping"),
+        ),
+        "marketing_db.fact_tta_ad_daily",
+    )
+
+    base.unpersist()
+
+
 def main():
     parser = argparse.ArgumentParser(description="MinIO to ClickHouse Batch Ingestion")
     parser.add_argument(
@@ -634,7 +753,7 @@ def main():
         print("  Mode: FULL (all data)")
     print("=" * 55)
 
-    print("\n[1/9] fad_ad_daily_report")
+    print("\n[1/10] fad_ad_daily_report")
     df_daily = read_table(spark, "fad_ad_daily_report", process_date)
     if df_daily is not None:
         df_daily.persist()
@@ -642,50 +761,55 @@ def main():
         populate_dim_date(spark, df_daily)
         df_daily.unpersist()
 
-    print("\n[2/9] fad_age_gender_detailed_report")
+    print("\n[2/10] fad_age_gender_detailed_report")
     df_demo = read_table(spark, "fad_age_gender_detailed_report", process_date)
     if df_demo is not None:
         process_age_gender(df_demo)
 
-    print("\n[3/9] gad_campaign_daily_report")
+    print("\n[3/10] gad_campaign_daily_report")
     df_cam = read_table(spark, "gad_campaign_daily_report", process_date)
     if df_cam is not None:
         process_gg_campaign(df_cam)
 
-    print("\n[4/9] gad_ad_group_daily_report")
+    print("\n[4/10] gad_ad_group_daily_report")
     df_grp = read_table(spark, "gad_ad_group_daily_report", process_date)
     if df_grp is not None:
         process_gg_adgroup(df_grp)
 
-    print("\n[5/9] gad_account_daily_report")
+    print("\n[5/10] gad_account_daily_report")
     df_acc = read_table(spark, "gad_account_daily_report", process_date)
     if df_acc is not None:
         process_gg_account(df_acc)
 
-    print("\n[6/9] gad_keyword_performance_report")
+    print("\n[6/10] gad_keyword_performance_report")
     df_kw = read_table(spark, "gad_keyword_performance_report", process_date)
     if df_kw is not None:
         process_gg_keyword(df_kw)
 
-    print("\n[7/9] gad_age_report")
+    print("\n[7/10] gad_age_report")
     df_age = read_table(spark, "gad_age_report", process_date)
     if df_age is not None:
         process_gg_age(df_age)
 
-    print("\n[7b/9] gad_gender_report")
+    print("\n[7b/10] gad_gender_report")
     df_gender = read_table(spark, "gad_gender_report", process_date)
     if df_gender is not None:
         process_gg_gender(df_gender)
 
-    print("\n[8/9] gad_ad_asset_daily_report")
+    print("\n[8/10] gad_ad_asset_daily_report")
     df_asset = read_table(spark, "gad_ad_asset_daily_report", process_date)
     if df_asset is not None:
         process_gg_ad_asset(df_asset)
 
-    print("\n[9/9] gad_click_type_report")
+    print("\n[9/10] gad_click_type_report")
     df_ct = read_table(spark, "gad_click_type_report", process_date)
     if df_ct is not None:
         process_gg_click_type(df_ct)
+
+    print("\n[10/10] TTA_ad_performance")
+    df_tta = read_table(spark, "TTA_ad_performance", process_date)
+    if df_tta is not None:
+        process_tta_ad_performance(df_tta)
 
     print("\n[DONE] All tables written to ClickHouse.")
     spark.stop()

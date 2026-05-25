@@ -5,6 +5,7 @@ Speed Layer: Spark Structured Streaming
               fad_ad_daily_report
               fad_age_gender_detailed_report
               topic_google_raw
+              TTA_ad_performance
   Sink    : Kafka processed topics — one per dim/fact table
   Trigger : every 30 seconds (configurable via SPEED_LAYER_TRIGGER env var)
 
@@ -20,7 +21,7 @@ Speed Layer: Spark Structured Streaming
     processed_fad_ad_daily_report
     processed_fact_fb_ad_demographic_daily
 
-  Google output topics (15):
+  Google output topics (17):
     processed_gad_campaign_daily_report
     processed_gad_ad_group_daily_report
     processed_gad_account_daily_report
@@ -38,6 +39,12 @@ Speed Layer: Spark Structured Streaming
     processed_fact_gg_gender_daily
     processed_fact_gg_asset_daily
     processed_fact_gg_click_type_daily
+
+  TikTok output topics (4):
+    processed_tta_ad_performance
+    processed_dim_tta_advertiser
+    processed_dim_tta_ad
+    processed_fact_tta_ad_daily
 
   Run (inside Docker, from airflow-scheduler container which has spark-submit + JARs):
     spark-submit --master spark://spark-master:7077 \\
@@ -69,6 +76,7 @@ TRIGGER_INTERVAL = os.getenv("SPEED_LAYER_TRIGGER", "30 seconds")
 # Raw input topics
 TOPIC_AD_DAILY   = "fad_ad_daily_report"
 TOPIC_AGE_GENDER = "fad_age_gender_detailed_report"
+TOPIC_TTA_RAW    = "TTA_ad_performance"
 # Google raw input topics (one per report type, produced by ingest/google/mock.py)
 GG_RAW_TOPICS = ",".join([
     "gad_campaign_daily_report",
@@ -111,6 +119,12 @@ TOPIC_FACT_GG_AGE         = "processed_fact_gg_age_daily"
 TOPIC_FACT_GG_GENDER      = "processed_fact_gg_gender_daily"
 TOPIC_FACT_GG_ASSET       = "processed_fact_gg_asset_daily"
 TOPIC_FACT_GG_CLICK_TYPE  = "processed_fact_gg_click_type_daily"
+
+# TikTok processed output topics
+TOPIC_TTA_AD_PERFORMANCE  = "processed_tta_ad_performance"
+TOPIC_DIM_TTA_ADVERTISER  = "processed_dim_tta_advertiser"
+TOPIC_DIM_TTA_AD          = "processed_dim_tta_ad"
+TOPIC_FACT_TTA_AD_DAILY   = "processed_fact_tta_ad_daily"
 
 # ── Input schemas ──────────────────────────────────────────────────────────────
 
@@ -817,6 +831,160 @@ def process_google_batch(batch_df: DataFrame, epoch_id: int) -> None:
     batch_df.unpersist()
     print(f"[epoch={epoch_id}] Google Done.")
 
+
+# ── TikTok schema ──────────────────────────────────────────────────────────────
+
+_TTA_AD_PERFORMANCE_SCHEMA = StructType([
+    StructField("pkId",                        StringType()),
+    StructField("user_id",                     StringType()),
+    StructField("stat_time_day",               StringType()),   # "2026-05-25 17:00:00.000"
+    StructField("ad_id",                       StringType()),
+    StructField("ad_name",                     StringType()),
+    StructField("ad_text",                     StringType()),
+    StructField("adgroup_name",                StringType()),
+    StructField("campaign_name",               StringType()),
+    StructField("advertiser_id",               StringType()),
+    StructField("advertiser_name",             StringType()),
+    StructField("start_date",                  StringType()),   # "2026-05-01 00:00:00.000"
+    StructField("end_date",                    StringType()),   # "2026-07-30 00:00:00.000"
+    StructField("spend",                       FloatType()),
+    StructField("impressions",                 IntegerType()),
+    StructField("clicks",                      IntegerType()),
+    StructField("ctr",                         FloatType()),
+    StructField("cpc",                         FloatType()),
+    StructField("cpm",                         FloatType()),
+    StructField("reach",                       IntegerType()),
+    StructField("frequency",                   FloatType()),
+    StructField("conversion",                  IntegerType()),
+    StructField("cost_per_conversion",         FloatType()),
+    StructField("conversion_rate",             FloatType()),
+    StructField("video_play_actions",          IntegerType()),
+    StructField("profile_visits",              IntegerType()),
+    StructField("likes",                       IntegerType()),
+    StructField("comments",                    IntegerType()),
+    StructField("shares",                      IntegerType()),
+    StructField("follows",                     IntegerType()),
+    StructField("live_views",                  IntegerType()),
+    StructField("purchase",                    IntegerType()),
+    StructField("onsite_shopping",             IntegerType()),
+    StructField("total_onsite_shopping_value", FloatType()),
+    StructField("onsite_shopping_roas",        FloatType()),
+    StructField("cost_per_onsite_shopping",    FloatType()),
+    StructField("createdAt",                   StringType()),
+    StructField("updatedAt",                   StringType()),
+])
+
+
+def process_tiktok_batch(batch_df: DataFrame, epoch_id: int) -> None:
+    """
+    foreachBatch handler for TTA_ad_performance.
+    Mirrors process_tta_ad_performance() from minio_ingest.py.
+    Produces to 4 processed_tta_* Kafka topics.
+    """
+    if batch_df.rdd.isEmpty():
+        return
+
+    print(f"\n[epoch={epoch_id}] TTA_ad_performance — transforming...")
+
+    base = batch_df.filter(F.col("ad_id").isNotNull()).select(
+        F.col("pkId"),
+        F.col("user_id"),
+        F.to_date(F.col("stat_time_day"), "yyyy-MM-dd HH:mm:ss.SSS").alias("stat_time_day"),
+        F.col("ad_id"),
+        F.coalesce(F.col("ad_name"),         F.lit("")).alias("ad_name"),
+        F.coalesce(F.col("ad_text"),         F.lit("")).alias("ad_text"),
+        F.coalesce(F.col("adgroup_name"),    F.lit("")).alias("adgroup_name"),
+        F.coalesce(F.col("campaign_name"),   F.lit("")).alias("campaign_name"),
+        F.col("advertiser_id"),
+        F.coalesce(F.col("advertiser_name"), F.lit("")).alias("advertiser_name"),
+        F.to_date(F.col("start_date"), "yyyy-MM-dd HH:mm:ss.SSS").alias("start_date"),
+        F.to_date(F.col("end_date"),   "yyyy-MM-dd HH:mm:ss.SSS").alias("end_date"),
+        F.coalesce(F.col("spend").cast("float"),                    F.lit(0.0)).alias("spend"),
+        F.coalesce(F.col("impressions").cast("int"),                F.lit(0)).alias("impressions"),
+        F.coalesce(F.col("clicks").cast("int"),                     F.lit(0)).alias("clicks"),
+        F.coalesce(F.col("ctr").cast("float"),                      F.lit(0.0)).alias("ctr"),
+        F.coalesce(F.col("cpc").cast("float"),                      F.lit(0.0)).alias("cpc"),
+        F.coalesce(F.col("cpm").cast("float"),                      F.lit(0.0)).alias("cpm"),
+        F.coalesce(F.col("reach").cast("int"),                      F.lit(0)).alias("reach"),
+        F.coalesce(F.col("frequency").cast("float"),                F.lit(0.0)).alias("frequency"),
+        F.coalesce(F.col("conversion").cast("int"),                 F.lit(0)).alias("conversion"),
+        F.coalesce(F.col("cost_per_conversion").cast("float"),      F.lit(0.0)).alias("cost_per_conversion"),
+        F.coalesce(F.col("conversion_rate").cast("float"),          F.lit(0.0)).alias("conversion_rate"),
+        F.coalesce(F.col("video_play_actions").cast("int"),         F.lit(0)).alias("video_play_actions"),
+        F.coalesce(F.col("profile_visits").cast("int"),             F.lit(0)).alias("profile_visits"),
+        F.coalesce(F.col("likes").cast("int"),                      F.lit(0)).alias("likes"),
+        F.coalesce(F.col("comments").cast("int"),                   F.lit(0)).alias("comments"),
+        F.coalesce(F.col("shares").cast("int"),                     F.lit(0)).alias("shares"),
+        F.coalesce(F.col("follows").cast("int"),                    F.lit(0)).alias("follows"),
+        F.coalesce(F.col("live_views").cast("int"),                 F.lit(0)).alias("live_views"),
+        F.coalesce(F.col("purchase").cast("int"),                   F.lit(0)).alias("purchase"),
+        F.coalesce(F.col("onsite_shopping").cast("int"),            F.lit(0)).alias("onsite_shopping"),
+        F.coalesce(F.col("total_onsite_shopping_value").cast("float"), F.lit(0.0)).alias("total_onsite_shopping_value"),
+        F.coalesce(F.col("onsite_shopping_roas").cast("float"),     F.lit(0.0)).alias("onsite_shopping_roas"),
+        F.coalesce(F.col("cost_per_onsite_shopping").cast("float"), F.lit(0.0)).alias("cost_per_onsite_shopping"),
+    )
+    base.persist()
+
+    # dim_tta_advertiser
+    produce_to_kafka(
+        base.select("advertiser_id", "advertiser_name")
+            .dropDuplicates(["advertiser_id"]),
+        TOPIC_DIM_TTA_ADVERTISER,
+    )
+
+    # dim_tta_ad
+    produce_to_kafka(
+        base.select(
+            F.col("ad_id"),
+            F.col("advertiser_id"),
+            F.col("campaign_name"),
+            F.col("adgroup_name"),
+            F.col("ad_name"),
+            F.col("ad_text"),
+        ).dropDuplicates(["ad_id"]),
+        TOPIC_DIM_TTA_AD,
+    )
+
+    # processed_tta_ad_performance (flat/denormalized real-time copy)
+    produce_to_kafka(base, TOPIC_TTA_AD_PERFORMANCE)
+
+    # fact_tta_ad_daily
+    produce_to_kafka(
+        base.select(
+            F.col("stat_time_day").alias("date"),
+            F.col("advertiser_id"),
+            F.col("ad_id"),
+            F.col("spend"),
+            F.col("impressions"),
+            F.col("clicks"),
+            F.col("ctr"),
+            F.col("cpc"),
+            F.col("cpm"),
+            F.col("reach"),
+            F.col("frequency"),
+            F.col("conversion"),
+            F.col("cost_per_conversion"),
+            F.col("conversion_rate"),
+            F.col("video_play_actions"),
+            F.col("profile_visits"),
+            F.col("likes"),
+            F.col("comments"),
+            F.col("shares"),
+            F.col("follows"),
+            F.col("live_views"),
+            F.col("purchase"),
+            F.col("onsite_shopping"),
+            F.col("total_onsite_shopping_value"),
+            F.col("onsite_shopping_roas"),
+            F.col("cost_per_onsite_shopping"),
+        ),
+        TOPIC_FACT_TTA_AD_DAILY,
+    )
+
+    base.unpersist()
+    print(f"[epoch={epoch_id}] TikTok Done.")
+
+
 # ── main ───────────────────────────────────────────────────────────────────────
 
 def main():
@@ -864,7 +1032,7 @@ def main():
         .start()
     )
 
-    # Stream 3: 8 gad_* topics → 15 processed_gg_* topics
+    # Stream 3: 8 gad_* topics → 17 processed_gg_* topics
     # Subscribe to all Google raw topics in one stream; dispatch inside
     # process_google_batch by the Kafka `topic` column.
     google_raw = read_kafka_stream(spark, GG_RAW_TOPICS)
@@ -880,7 +1048,24 @@ def main():
         .start()
     )
 
-    print(f"\nStreaming queries active: {q_ad_daily.id}, {q_age_gender.id}, {q_google.id}")
+    # Stream 4: TTA_ad_performance → 4 processed_tta_* topics
+    tiktok_raw = read_kafka_stream(spark, TOPIC_TTA_RAW)
+    parsed_tiktok = tiktok_raw.select(
+        F.from_json(F.col("value").cast("string"), _TTA_AD_PERFORMANCE_SCHEMA).alias("d")
+    ).select("d.*")
+
+    q_tiktok = (
+        parsed_tiktok.writeStream
+        .foreachBatch(process_tiktok_batch)
+        .option(
+            "checkpointLocation",
+            f"s3a://{MINIO_BUCKET}/checkpoints/speed_layer/tiktok/",
+        )
+        .trigger(processingTime=TRIGGER_INTERVAL)
+        .start()
+    )
+
+    print(f"\nStreaming queries active: {q_ad_daily.id}, {q_age_gender.id}, {q_google.id}, {q_tiktok.id}")
     print("Waiting for termination (Ctrl+C to stop)...")
     spark.streams.awaitAnyTermination()
 

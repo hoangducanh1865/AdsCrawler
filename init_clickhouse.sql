@@ -510,3 +510,124 @@ CREATE TABLE IF NOT EXISTS marketing_db.fact_gg_click_type_daily
 ) ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY toYYYYMM(date)
 ORDER BY (account_id, campaign_id, click_type, device, date);
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- TikTok Ads: flat denormalized report  (tta_ prefix)
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS marketing_db.tta_ad_performance
+(
+    pkId                         String,
+    user_id                      Nullable(String),
+    stat_time_day                Date,
+
+    ad_id                        String,
+    ad_name                      Nullable(String),
+    ad_text                      Nullable(String),
+    adgroup_name                 Nullable(String),
+    campaign_name                Nullable(String),
+    advertiser_id                String,
+    advertiser_name              Nullable(String),
+
+    start_date                   Nullable(Date),
+    end_date                     Nullable(Date),
+
+    spend                        Nullable(Float64),
+    impressions                  Nullable(Int32),
+    clicks                       Nullable(Int32),
+    ctr                          Nullable(Float64),
+    cpc                          Nullable(Float64),
+    cpm                          Nullable(Float64),
+    reach                        Nullable(Int32),
+    frequency                    Nullable(Float64),
+
+    conversion                   Nullable(Int32),
+    cost_per_conversion          Nullable(Float64),
+    conversion_rate              Nullable(Float64),
+
+    video_play_actions           Nullable(Int32),
+    profile_visits               Nullable(Int32),
+    likes                        Nullable(Int32),
+    comments                     Nullable(Int32),
+    shares                       Nullable(Int32),
+    follows                      Nullable(Int32),
+    live_views                   Nullable(Int32),
+
+    purchase                     Nullable(Int32),
+    onsite_shopping              Nullable(Int32),
+    total_onsite_shopping_value  Nullable(Float64),
+    onsite_shopping_roas         Nullable(Float64),
+    cost_per_onsite_shopping     Nullable(Float64),
+
+    createdAt                    Nullable(DateTime),
+    updatedAt                    Nullable(DateTime)
+)
+ENGINE = ReplacingMergeTree()
+PARTITION BY toYYYYMM(stat_time_day)
+ORDER BY (advertiser_id, ad_id, stat_time_day)
+SETTINGS allow_nullable_key = 1;
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- TikTok Ads: snowflake schema  (dim_tta_ / fact_tta_ prefix)
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS marketing_db.dim_tta_advertiser
+(
+    advertiser_id   String,
+    advertiser_name String,
+    updated_at      DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY advertiser_id;
+
+CREATE TABLE IF NOT EXISTS marketing_db.dim_tta_ad
+(
+    ad_id           String,
+    advertiser_id   String,
+    campaign_name   String,
+    adgroup_name    String,
+    ad_name         String,
+    ad_text         String,
+    updated_at      DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY ad_id;
+
+CREATE TABLE IF NOT EXISTS marketing_db.fact_tta_ad_daily
+(
+    date                         Date,
+    advertiser_id                String,
+    ad_id                        String,
+
+    spend                        Float32 DEFAULT 0,
+    impressions                  Int32   DEFAULT 0,
+    clicks                       Int32   DEFAULT 0,
+    ctr                          Float32 DEFAULT 0,
+    cpc                          Float32 DEFAULT 0,
+    cpm                          Float32 DEFAULT 0,
+    reach                        Int32   DEFAULT 0,
+    frequency                    Float32 DEFAULT 0,
+
+    conversion                   Int32   DEFAULT 0,
+    cost_per_conversion          Float32 DEFAULT 0,
+    conversion_rate              Float32 DEFAULT 0,
+
+    video_play_actions           Int32   DEFAULT 0,
+    profile_visits               Int32   DEFAULT 0,
+    likes                        Int32   DEFAULT 0,
+    comments                     Int32   DEFAULT 0,
+    shares                       Int32   DEFAULT 0,
+    follows                      Int32   DEFAULT 0,
+    live_views                   Int32   DEFAULT 0,
+
+    purchase                     Int32   DEFAULT 0,
+    onsite_shopping              Int32   DEFAULT 0,
+    total_onsite_shopping_value  Float32 DEFAULT 0,
+    onsite_shopping_roas         Float32 DEFAULT 0,
+    cost_per_onsite_shopping     Float32 DEFAULT 0,
+
+    updated_at                   DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY toYYYYMM(date)
+ORDER BY (advertiser_id, ad_id, date);

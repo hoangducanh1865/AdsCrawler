@@ -1,7 +1,7 @@
 {
   "connector.class": "io.confluent.connect.s3.S3SinkConnector",
   "tasks.max": "1",
-  "topics": "fad_ad_daily_report,fad_age_gender_detailed_report,gad_campaign_daily_report,gad_ad_group_daily_report,gad_account_daily_report,gad_keyword_performance_report,gad_age_report,gad_gender_report,gad_ad_asset_daily_report,gad_click_type_report",
+  "topics": "fad_ad_daily_report,fad_age_gender_detailed_report,gad_campaign_daily_report,gad_ad_group_daily_report,gad_account_daily_report,gad_keyword_performance_report,gad_age_report,gad_gender_report,gad_ad_asset_daily_report,gad_click_type_report,TTA_ad_performance",
   "s3.bucket.name": "marketing-datalake",
   "s3.region": "us-east-1",
   "store.url": "http://minio:9000",

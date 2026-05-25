@@ -1273,3 +1273,247 @@ TTL date + INTERVAL 1 DAY;
 CREATE MATERIALIZED VIEW IF NOT EXISTS marketing_db.mv_rt_fact_gg_click_type_daily
 TO marketing_db.rt_fact_gg_click_type_daily
 AS SELECT * FROM marketing_db.kafka_rt_fact_gg_click_type_daily;
+
+
+-- =============================================================================
+-- TikTok Real-Time Layer
+-- Source : processed_tta_* topics (output of speed_layer.py)
+-- =============================================================================
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 26. processed_tta_ad_performance  (flat/denormalized real-time copy)
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS marketing_db.kafka_rt_tta_ad_performance
+(
+    pkId                         String,
+    user_id                      String,
+    stat_time_day                Date,
+    ad_id                        String,
+    ad_name                      String,
+    ad_text                      String,
+    adgroup_name                 String,
+    campaign_name                String,
+    advertiser_id                String,
+    advertiser_name              String,
+    start_date                   Date,
+    end_date                     Date,
+    spend                        Float32,
+    impressions                  Int32,
+    clicks                       Int32,
+    ctr                          Float32,
+    cpc                          Float32,
+    cpm                          Float32,
+    reach                        Int32,
+    frequency                    Float32,
+    conversion                   Int32,
+    cost_per_conversion          Float32,
+    conversion_rate              Float32,
+    video_play_actions           Int32,
+    profile_visits               Int32,
+    likes                        Int32,
+    comments                     Int32,
+    shares                       Int32,
+    follows                      Int32,
+    live_views                   Int32,
+    purchase                     Int32,
+    onsite_shopping              Int32,
+    total_onsite_shopping_value  Float32,
+    onsite_shopping_roas         Float32,
+    cost_per_onsite_shopping     Float32
+) ENGINE = Kafka
+SETTINGS
+    kafka_broker_list = 'kafka:29092',
+    kafka_topic_list  = 'processed_tta_ad_performance',
+    kafka_group_name  = 'ch_rt_consumer',
+    kafka_format      = 'JSONEachRow';
+
+CREATE TABLE IF NOT EXISTS marketing_db.rt_tta_ad_performance
+(
+    pkId                         String,
+    user_id                      String,
+    stat_time_day                Date,
+    ad_id                        String,
+    ad_name                      String,
+    ad_text                      String,
+    adgroup_name                 String,
+    campaign_name                String,
+    advertiser_id                String,
+    advertiser_name              String,
+    start_date                   Date,
+    end_date                     Date,
+    spend                        Float32 DEFAULT 0,
+    impressions                  Int32   DEFAULT 0,
+    clicks                       Int32   DEFAULT 0,
+    ctr                          Float32 DEFAULT 0,
+    cpc                          Float32 DEFAULT 0,
+    cpm                          Float32 DEFAULT 0,
+    reach                        Int32   DEFAULT 0,
+    frequency                    Float32 DEFAULT 0,
+    conversion                   Int32   DEFAULT 0,
+    cost_per_conversion          Float32 DEFAULT 0,
+    conversion_rate              Float32 DEFAULT 0,
+    video_play_actions           Int32   DEFAULT 0,
+    profile_visits               Int32   DEFAULT 0,
+    likes                        Int32   DEFAULT 0,
+    comments                     Int32   DEFAULT 0,
+    shares                       Int32   DEFAULT 0,
+    follows                      Int32   DEFAULT 0,
+    live_views                   Int32   DEFAULT 0,
+    purchase                     Int32   DEFAULT 0,
+    onsite_shopping              Int32   DEFAULT 0,
+    total_onsite_shopping_value  Float32 DEFAULT 0,
+    onsite_shopping_roas         Float32 DEFAULT 0,
+    cost_per_onsite_shopping     Float32 DEFAULT 0,
+    updated_at                   DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (advertiser_id, ad_id, stat_time_day)
+TTL stat_time_day + INTERVAL 1 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS marketing_db.mv_rt_tta_ad_performance
+TO marketing_db.rt_tta_ad_performance
+AS SELECT * FROM marketing_db.kafka_rt_tta_ad_performance;
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 27. processed_dim_tta_advertiser
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS marketing_db.kafka_rt_dim_tta_advertiser
+(
+    advertiser_id   String,
+    advertiser_name String
+) ENGINE = Kafka
+SETTINGS
+    kafka_broker_list = 'kafka:29092',
+    kafka_topic_list  = 'processed_dim_tta_advertiser',
+    kafka_group_name  = 'ch_rt_consumer',
+    kafka_format      = 'JSONEachRow';
+
+CREATE TABLE IF NOT EXISTS marketing_db.rt_dim_tta_advertiser
+(
+    advertiser_id   String,
+    advertiser_name String,
+    updated_at      DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY advertiser_id
+TTL toDate(updated_at) + INTERVAL 1 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS marketing_db.mv_rt_dim_tta_advertiser
+TO marketing_db.rt_dim_tta_advertiser
+AS SELECT * FROM marketing_db.kafka_rt_dim_tta_advertiser;
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 28. processed_dim_tta_ad
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS marketing_db.kafka_rt_dim_tta_ad
+(
+    ad_id         String,
+    advertiser_id String,
+    campaign_name String,
+    adgroup_name  String,
+    ad_name       String,
+    ad_text       String
+) ENGINE = Kafka
+SETTINGS
+    kafka_broker_list = 'kafka:29092',
+    kafka_topic_list  = 'processed_dim_tta_ad',
+    kafka_group_name  = 'ch_rt_consumer',
+    kafka_format      = 'JSONEachRow';
+
+CREATE TABLE IF NOT EXISTS marketing_db.rt_dim_tta_ad
+(
+    ad_id         String,
+    advertiser_id String,
+    campaign_name String,
+    adgroup_name  String,
+    ad_name       String,
+    ad_text       String,
+    updated_at    DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY ad_id
+TTL toDate(updated_at) + INTERVAL 1 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS marketing_db.mv_rt_dim_tta_ad
+TO marketing_db.rt_dim_tta_ad
+AS SELECT * FROM marketing_db.kafka_rt_dim_tta_ad;
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 29. processed_fact_tta_ad_daily
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS marketing_db.kafka_rt_fact_tta_ad_daily
+(
+    date                         Date,
+    advertiser_id                String,
+    ad_id                        String,
+    spend                        Float32,
+    impressions                  Int32,
+    clicks                       Int32,
+    ctr                          Float32,
+    cpc                          Float32,
+    cpm                          Float32,
+    reach                        Int32,
+    frequency                    Float32,
+    conversion                   Int32,
+    cost_per_conversion          Float32,
+    conversion_rate              Float32,
+    video_play_actions           Int32,
+    profile_visits               Int32,
+    likes                        Int32,
+    comments                     Int32,
+    shares                       Int32,
+    follows                      Int32,
+    live_views                   Int32,
+    purchase                     Int32,
+    onsite_shopping              Int32,
+    total_onsite_shopping_value  Float32,
+    onsite_shopping_roas         Float32,
+    cost_per_onsite_shopping     Float32
+) ENGINE = Kafka
+SETTINGS
+    kafka_broker_list = 'kafka:29092',
+    kafka_topic_list  = 'processed_fact_tta_ad_daily',
+    kafka_group_name  = 'ch_rt_consumer',
+    kafka_format      = 'JSONEachRow';
+
+CREATE TABLE IF NOT EXISTS marketing_db.rt_fact_tta_ad_daily
+(
+    date                         Date,
+    advertiser_id                String,
+    ad_id                        String,
+    spend                        Float32 DEFAULT 0,
+    impressions                  Int32   DEFAULT 0,
+    clicks                       Int32   DEFAULT 0,
+    ctr                          Float32 DEFAULT 0,
+    cpc                          Float32 DEFAULT 0,
+    cpm                          Float32 DEFAULT 0,
+    reach                        Int32   DEFAULT 0,
+    frequency                    Float32 DEFAULT 0,
+    conversion                   Int32   DEFAULT 0,
+    cost_per_conversion          Float32 DEFAULT 0,
+    conversion_rate              Float32 DEFAULT 0,
+    video_play_actions           Int32   DEFAULT 0,
+    profile_visits               Int32   DEFAULT 0,
+    likes                        Int32   DEFAULT 0,
+    comments                     Int32   DEFAULT 0,
+    shares                       Int32   DEFAULT 0,
+    follows                      Int32   DEFAULT 0,
+    live_views                   Int32   DEFAULT 0,
+    purchase                     Int32   DEFAULT 0,
+    onsite_shopping              Int32   DEFAULT 0,
+    total_onsite_shopping_value  Float32 DEFAULT 0,
+    onsite_shopping_roas         Float32 DEFAULT 0,
+    cost_per_onsite_shopping     Float32 DEFAULT 0,
+    updated_at                   DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (advertiser_id, ad_id, date)
+TTL date + INTERVAL 1 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS marketing_db.mv_rt_fact_tta_ad_daily
+TO marketing_db.rt_fact_tta_ad_daily
+AS SELECT * FROM marketing_db.kafka_rt_fact_tta_ad_daily;
