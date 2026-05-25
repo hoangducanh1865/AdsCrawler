@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: speed-layer
+  namespace: marketing
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: speed-layer
+  template:
+    metadata:
+      labels:
+        app: speed-layer
+    spec:
+      containers:
+        - name: speed-layer
+          image: mkt_airflow:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:29092"
+            - name: MINIO_ENDPOINT
+              value: "http://minio:9000"
+            - name: MINIO_ACCESS_KEY
+              value: "admin"
+            - name: MINIO_SECRET_KEY
+              value: "password123"
+            - name: MINIO_BUCKET
+              value: "marketing-datalake"
+            - name: SPEED_LAYER_TRIGGER
+              value: "30 seconds"
+          command:
+            - bash
+            - -c
+            - |
+              spark-submit \
+                --master spark://spark-master:7077 \
+                --conf spark.cores.max=2 \
+                --conf spark.executor.memory=512m \
+                --jars /opt/airflow/jars/spark-sql-kafka.jar,/opt/airflow/jars/kafka-clients.jar,/opt/airflow/jars/hadoop-aws.jar,/opt/airflow/jars/aws-java-sdk-bundle.jar,/opt/airflow/jars/commons-pool2.jar,/opt/airflow/jars/spark-token-provider-kafka.jar \
+                /opt/spark/work-dir/spark_consumer/speed_layer.py
+          volumeMounts:
+            - mountPath: /opt/spark/work-dir
+              name: project-dir
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1536Mi"
+              cpu: "1000m"
+      volumes:
+        - name: project-dir
+          hostPath:
+            path: /opt/spark/work-dir
+            type: Directory

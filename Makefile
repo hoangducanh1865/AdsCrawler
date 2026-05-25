@@ -32,6 +32,9 @@ minio-ui:
 spark-ui:
 	minikube service spark-master -n marketing
 
+kafka-connect-ui:
+	minikube service kafka-connect -n marketing
+
 # --- Speed Layer (Spark Structured Streaming) ---
 
 speed-layer:
