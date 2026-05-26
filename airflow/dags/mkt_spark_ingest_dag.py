@@ -1,5 +1,5 @@
 # airflow/dags/mkt_spark_ingest_dag.py
-# This DAG is responsible ONLY for submitting the Spark Batch job 
+# This DAG is responsible ONLY for submitting the Spark Batch job
 # to ingest data from MinIO into ClickHouse.
 
 from airflow import DAG

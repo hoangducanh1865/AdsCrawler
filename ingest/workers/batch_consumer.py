@@ -35,7 +35,7 @@ def consume_and_ingest():
                     continue
                 elif msg.error().code() == KafkaError.UNKNOWN_TOPIC_OR_PART:
                     # Topic doesn't exist yet, wait for it
-                    print(f"[batch_consumer] Topic not found yet, retrying...")
+                    print("[batch_consumer] Topic not found yet, retrying...")
                     empty_polls += 1
                     continue
                 raise RuntimeError(f"Kafka error: {msg.error()}")

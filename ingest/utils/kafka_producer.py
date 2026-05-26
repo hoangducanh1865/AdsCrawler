@@ -57,7 +57,6 @@ class KafkaJsonProducer:
         for record in records:
             enriched = self._enrich_partition_fields(record.copy())
             value = json.dumps(enriched, ensure_ascii=False).encode('utf-8')
-            
             # Extract logical date for Kafka message timestamp
             # Looks for date_start, date, or stat_time_day
             date_str = enriched.get("date_start") or enriched.get("date") or enriched.get("stat_time_day")
